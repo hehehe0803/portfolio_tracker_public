@@ -232,8 +232,8 @@ async def resolve_historical_value(
     source_coverage: Sequence[SourceCoverageWindow],
     price_lookup: HistoricalPriceLookup = get_historical_price_usd,
     transaction_ledger_complete: bool = False,
-    cashflow_classifications_complete: bool = True,
-    accounting_decisions_complete: bool = True,
+    cashflow_classifications_complete: bool = False,
+    accounting_decisions_complete: bool = False,
 ) -> HistoricalValueResult:
     exact_anchors_on_date = _exact_anchors_for_date(
         as_of=as_of,
