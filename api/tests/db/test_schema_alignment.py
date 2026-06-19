@@ -60,6 +60,7 @@ EXPECTED_TABLES = {
     "accounting_external_cashflow_classifications",
     "accounting_import_approvals",
     "accounting_cost_basis_decisions",
+    "accounting_reconciliation_tasks",
     "accounting_evidence_claims",
 }
 EXPECTED_INDEXES = {
@@ -106,6 +107,12 @@ EXPECTED_INDEXES = {
         "ix_accounting_cost_basis_decisions_asset_effective_at",
         "uq_accounting_cost_basis_decisions_active_key",
     },
+    "accounting_reconciliation_tasks": {
+        "ix_accounting_reconciliation_tasks_source_occurred_at",
+        "ix_accounting_reconciliation_tasks_status_severity",
+        "uq_accounting_reconciliation_tasks_task_id",
+        "uq_accounting_reconciliation_tasks_active_key",
+    },
     "accounting_evidence_claims": {
         "ix_accounting_evidence_claims_source",
     },
@@ -151,6 +158,16 @@ EXPECTED_CHECK_CONSTRAINTS = {
         "ck_accounting_cost_basis_decisions_unit_nonnegative",
         "ck_accounting_cost_basis_decisions_value_consistent",
         "ck_accounting_cost_basis_decisions_unknown_not_trusted",
+    },
+    "accounting_reconciliation_tasks": {
+        "ck_accounting_reconciliation_tasks_status",
+        "ck_accounting_reconciliation_tasks_severity",
+        "ck_accounting_reconciliation_tasks_task_type",
+        "ck_accounting_reconciliation_tasks_void_lifecycle",
+        "ck_accounting_reconciliation_tasks_resolution_lifecycle",
+        "ck_accounting_reconciliation_tasks_quantity_sanity",
+        "ck_accounting_reconciliation_tasks_amount_sanity",
+        "ck_accounting_reconciliation_tasks_decision_reference",
     },
     "accounting_evidence_claims": {
         "ck_accounting_evidence_claims_source_table",
@@ -526,6 +543,7 @@ def test_importing_app_db_registers_new_tables() -> None:
         "accounting_external_cashflow_classifications",
         "accounting_import_approvals",
         "accounting_cost_basis_decisions",
+        "accounting_reconciliation_tasks",
         "accounting_evidence_claims",
     } <= table_names
 
@@ -605,6 +623,14 @@ def test_metadata_signature_includes_tag_note_and_activity_tables() -> None:
             (
                 ("supersedes_id",),
                 "accounting_cost_basis_decisions",
+                ("id",),
+                "SET NULL",
+            ),
+        },
+        "accounting_reconciliation_tasks": {
+            (
+                ("supersedes_id",),
+                "accounting_reconciliation_tasks",
                 ("id",),
                 "SET NULL",
             ),
@@ -703,6 +729,14 @@ def test_core_schema_alignment_after_full_migration_cycle() -> None:
             (
                 ("supersedes_id",),
                 "accounting_cost_basis_decisions",
+                ("id",),
+                "SET NULL",
+            ),
+        },
+        "accounting_reconciliation_tasks": {
+            (
+                ("supersedes_id",),
+                "accounting_reconciliation_tasks",
                 ("id",),
                 "SET NULL",
             ),
