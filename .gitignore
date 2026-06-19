@@ -60,6 +60,7 @@ docs/superpowers/plans/*
 !docs/superpowers/plans/2026-06-18-vnext-01c-durable-accounting-state-schema.md
 !docs/superpowers/plans/2026-06-19-vnext-sprint-map.md
 !docs/superpowers/plans/2026-06-19-vnext-sprint-plan-pack.md
+!docs/superpowers/plans/2026-06-19-vnext-orchestrator-goal.md
 .hermes/
 data/*
 !data/README.md
