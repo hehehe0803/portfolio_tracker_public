@@ -29,6 +29,16 @@ DECISION_MODELS = {
     "accounting_cost_basis_decision": AccountingCostBasisDecision,
 }
 
+DECISION_TYPES_BY_TASK_TYPE = {
+    "unknown_outgoing_transfer": {
+        "accounting_transfer_link",
+        "accounting_external_cashflow_classification",
+    },
+    "missing_cost_basis": {"accounting_cost_basis_decision"},
+    "import_approval": {"accounting_import_approval"},
+    "source_coverage_gap": {"accounting_import_approval"},
+}
+
 
 class AccountingResolutionError(ValueError):
     pass
@@ -181,7 +191,6 @@ async def reconcile_and_persist_movements(
     for task in result.reconciliation_tasks:
         existing_task = await session.scalar(
             select(AccountingReconciliationTask).where(
-                AccountingReconciliationTask.status == "open",
                 AccountingReconciliationTask.task_key == task.task_key,
             )
         )
@@ -231,11 +240,20 @@ async def resolve_reconciliation_task(
         raise AccountingResolutionError(
             f"decision type {decision_type!r} is not supported"
         )
+    if decision_type not in DECISION_TYPES_BY_TASK_TYPE.get(task.task_type, set()):
+        raise AccountingResolutionError(
+            f"decision type {decision_type!r} cannot resolve task type "
+            f"{task.task_type!r}"
+        )
 
     decision = await session.get(decision_model, decision_id)
     if decision is None:
         raise AccountingResolutionError(
             f"{decision_type} id {decision_id!r} does not exist"
+        )
+    if decision.status != "active":
+        raise AccountingResolutionError(
+            f"{decision_type} id {decision_id!r} is not active"
         )
     if decision.review_task_id != task.task_id:
         raise AccountingResolutionError(
@@ -343,17 +361,30 @@ def _occurred_at(movement: MovementEvidence) -> datetime:
     return movement.occurred_at.astimezone(UTC)
 
 
+def _quantity_abs(movement: MovementEvidence) -> Decimal:
+    return abs(movement.quantity)
+
+
 def _is_outgoing(movement: MovementEvidence) -> bool:
-    return movement.quantity < Decimal("0") and (
-        "withdraw" in movement.tx_type.lower() or "outgoing" in movement.tx_type.lower()
-    )
+    tx_type = movement.tx_type.lower()
+    if (
+        "withdraw" in tx_type
+        or "outgoing" in tx_type
+        or "transfer_out" in tx_type
+    ):
+        return _quantity_abs(movement) > Decimal("0")
+    return movement.quantity < Decimal("0") and "transfer_in" not in tx_type
 
 
 def _is_deposit(movement: MovementEvidence) -> bool:
+    tx_type = movement.tx_type.lower()
+    if "transfer_out" in tx_type:
+        return False
     return movement.quantity > Decimal("0") and (
-        "deposit" in movement.tx_type.lower()
-        or "incoming" in movement.tx_type.lower()
-        or "transfer_candidate" in movement.tx_type.lower()
+        "deposit" in tx_type
+        or "incoming" in tx_type
+        or "transfer_in" in tx_type
+        or "transfer_candidate" in tx_type
     )
 
 
@@ -377,7 +408,7 @@ def _is_candidate_quantity(
     withdrawal: MovementEvidence,
     deposit: MovementEvidence,
 ) -> bool:
-    withdrawn = abs(withdrawal.quantity)
+    withdrawn = _quantity_abs(withdrawal)
     if withdrawn == Decimal("0"):
         return deposit.quantity == Decimal("0")
     delta = abs(deposit.quantity - withdrawn)
@@ -393,7 +424,7 @@ def _deterministic_candidate(
     exact_quantity_candidates = [
         candidate
         for candidate in candidates
-        if candidate.quantity == abs(withdrawal.quantity)
+        if candidate.quantity == _quantity_abs(withdrawal)
     ]
     deterministic = [
         candidate
@@ -433,7 +464,8 @@ def _transfer_link(
     withdrawal: MovementEvidence,
     deposit: MovementEvidence,
 ) -> TransferLinkRecord:
-    quantity_delta = abs(abs(withdrawal.quantity) - deposit.quantity)
+    withdrawn = _quantity_abs(withdrawal)
+    quantity_delta = abs(withdrawn - deposit.quantity)
     decision_reason = (
         "authoritative_control_total"
         if _has_authoritative_control_total(withdrawal, deposit)
@@ -450,7 +482,7 @@ def _transfer_link(
         from_evidence_key=withdrawal.evidence_key,
         to_evidence_key=deposit.evidence_key,
         asset_symbol=_asset(withdrawal),
-        from_quantity=abs(withdrawal.quantity),
+        from_quantity=withdrawn,
         to_quantity=deposit.quantity,
         quantity_delta=quantity_delta,
         fee_quantity=None,
@@ -478,7 +510,7 @@ def _unknown_outgoing_task(
     reasons = ["unknown_outgoing_crypto"]
     if candidate_count == 1:
         candidate = candidates[0]
-        if candidate.quantity != abs(withdrawal.quantity):
+        if candidate.quantity != _quantity_abs(withdrawal):
             reasons.append("fee_or_slippage_candidate")
         else:
             reasons.append("amount_date_only_candidate")
@@ -493,7 +525,7 @@ def _unknown_outgoing_task(
         severity="review_required",
         source=_source(withdrawal),
         asset_symbol=_asset(withdrawal),
-        quantity=abs(withdrawal.quantity),
+        quantity=_quantity_abs(withdrawal),
         amount_usd=_positive_amount(withdrawal.amount_usd),
         occurred_at=_occurred_at(withdrawal),
         evidence={
@@ -536,7 +568,7 @@ def _external_withdrawal(
         movement_type="external_cashflow",
         source=_source(movement),
         asset_symbol=_asset(movement),
-        quantity=abs(movement.quantity),
+        quantity=_quantity_abs(movement),
         amount_usd=amount,
         occurred_at=_occurred_at(movement),
         capital_effect_usd=capital_effect,

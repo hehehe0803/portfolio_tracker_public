@@ -99,6 +99,50 @@ def test_exact_binance_to_aster_identifier_match_writes_active_transfer_link() -
     assert link.capital_effect_usd == Decimal("0")
 
 
+def test_parser_style_transfer_out_without_match_creates_open_task() -> None:
+    result = _result_for(
+        _movement(
+            tx_type="transfer_out",
+            asset_symbol="BTC",
+            quantity=Decimal("0.25"),
+            evidence_key="binance-transfer-out-btc",
+            amount_usd=Decimal("15000"),
+        )
+    )
+
+    assert result.transfer_links == []
+    assert result.external_cashflow_classifications == []
+    assert len(result.reconciliation_tasks) == 1
+    task = result.reconciliation_tasks[0]
+    assert task.task_type == "unknown_outgoing_transfer"
+    assert task.quantity == Decimal("0.25")
+
+
+def test_parser_style_transfer_out_and_transfer_in_identifier_match() -> None:
+    withdrawal = _movement(
+        tx_type="transfer_out",
+        quantity=Decimal("25"),
+        destination_event_id="aster-transfer-in-1",
+        evidence_key="binance-transfer-out-usdt",
+    )
+    deposit = _movement(
+        source="aster",
+        tx_type="transfer_in",
+        quantity=Decimal("25"),
+        evidence_key="aster-transfer-in-usdt",
+        source_event_id="aster-transfer-in-1",
+        occurred_at=NOW + timedelta(hours=2),
+    )
+
+    result = _result_for(withdrawal, deposit)
+
+    assert result.reconciliation_tasks == []
+    assert len(result.transfer_links) == 1
+    link = result.transfer_links[0]
+    assert link.from_quantity == Decimal("25")
+    assert link.to_quantity == Decimal("25")
+
+
 def test_exact_binance_to_hyperliquid_identifier_writes_active_link() -> None:
     withdrawal = _movement(
         quantity=Decimal("-50"),
@@ -363,35 +407,105 @@ async def test_resolve_reconciliation_task_validates_decision_back_reference(
                 )
             )
             assert task is not None
-            decision = AccountingCostBasisDecision(
-                basis_key="basis:sol:manual",
-                decision_type="manual_cost_basis",
+            decision = AccountingExternalCashflowClassification(
+                classification_key="cashflow:sol:manual-withdrawal",
+                evidence={"source_evidence_key": "binance-sol-withdrawal"},
+                evidence_key="binance-sol-withdrawal",
+                cashflow_type="external_withdrawal",
+                movement_type="external_cashflow",
+                source="binance",
                 asset_symbol="SOL",
-                basis_scope="asset_global",
-                cost_basis_usd=Decimal("1000"),
-                effective_at=NOW,
+                quantity=Decimal("10"),
+                amount_usd=Decimal("1000"),
+                occurred_at=NOW,
+                capital_effect_usd=Decimal("-1000"),
                 confidence_state="trusted",
-                affected_metric_scopes=["asset_lifetime_pnl"],
+                materiality_usd=Decimal("1000"),
                 review_task_id=task.task_id,
                 created_by="local_user",
                 decision_source="manual",
                 status="active",
-                decision_reason="manual_average_cost",
+                decision_reason="manual_personal_withdrawal",
             )
             session.add(decision)
             await session.flush()
             resolved = await resolve_reconciliation_task(
                 session,
                 task_id=task.task_id,
-                decision_type="accounting_cost_basis_decision",
+                decision_type="accounting_external_cashflow_classification",
                 decision_id=decision.id,
                 resolved_by="local_user",
                 resolved_at=NOW,
             )
 
         assert resolved.status == "resolved"
-        assert resolved.resolved_by_decision_type == "accounting_cost_basis_decision"
+        assert (
+            resolved.resolved_by_decision_type
+            == "accounting_external_cashflow_classification"
+        )
         assert resolved.resolved_by_decision_id == decision.id
+
+
+async def test_resolved_task_is_not_recreated_on_same_evidence(
+    session_factory,
+) -> None:
+    movement = _movement(
+        asset_symbol="SOL",
+        quantity=Decimal("-10"),
+        evidence_key="binance-sol-resolved-rerun",
+        amount_usd=Decimal("1000"),
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await reconcile_and_persist_movements(session, [movement])
+            task = await session.scalar(
+                select(AccountingReconciliationTask).where(
+                    AccountingReconciliationTask.task_key
+                    == "task:unknown_outgoing_transfer:binance-sol-resolved-rerun"
+                )
+            )
+            assert task is not None
+            decision = AccountingExternalCashflowClassification(
+                classification_key="cashflow:sol:resolved-rerun",
+                evidence={"source_evidence_key": "binance-sol-resolved-rerun"},
+                evidence_key="binance-sol-resolved-rerun",
+                cashflow_type="external_withdrawal",
+                movement_type="external_cashflow",
+                source="binance",
+                asset_symbol="SOL",
+                quantity=Decimal("10"),
+                amount_usd=Decimal("1000"),
+                occurred_at=NOW,
+                capital_effect_usd=Decimal("-1000"),
+                confidence_state="trusted",
+                materiality_usd=Decimal("1000"),
+                review_task_id=task.task_id,
+                created_by="local_user",
+                decision_source="manual",
+                status="active",
+                decision_reason="manual_personal_withdrawal",
+            )
+            session.add(decision)
+            await session.flush()
+            await resolve_reconciliation_task(
+                session,
+                task_id=task.task_id,
+                decision_type="accounting_external_cashflow_classification",
+                decision_id=decision.id,
+                resolved_by="local_user",
+                resolved_at=NOW,
+            )
+            await reconcile_and_persist_movements(session, [movement])
+
+        tasks = (
+            (await session.execute(select(AccountingReconciliationTask)))
+            .scalars()
+            .all()
+        )
+
+    assert len(tasks) == 1
+    assert tasks[0].status == "resolved"
 
 
 async def test_resolve_reconciliation_task_rejects_missing_decision(
@@ -424,6 +538,57 @@ async def test_resolve_reconciliation_task_rejects_missing_decision(
                 )
 
 
+async def test_resolve_reconciliation_task_rejects_incompatible_decision_type(
+    session_factory,
+) -> None:
+    movement = _movement(
+        asset_symbol="SOL",
+        quantity=Decimal("-10"),
+        evidence_key="binance-sol-incompatible-decision",
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await reconcile_and_persist_movements(session, [movement])
+            task = await session.scalar(
+                select(AccountingReconciliationTask).where(
+                    AccountingReconciliationTask.task_key
+                    == (
+                        "task:unknown_outgoing_transfer:"
+                        "binance-sol-incompatible-decision"
+                    )
+                )
+            )
+            assert task is not None
+            decision = AccountingCostBasisDecision(
+                basis_key="basis:sol:incompatible",
+                decision_type="manual_cost_basis",
+                asset_symbol="SOL",
+                basis_scope="asset_global",
+                cost_basis_usd=Decimal("1000"),
+                effective_at=NOW,
+                confidence_state="trusted",
+                affected_metric_scopes=["asset_lifetime_pnl"],
+                review_task_id=task.task_id,
+                created_by="local_user",
+                decision_source="manual",
+                status="active",
+                decision_reason="manual_average_cost",
+            )
+            session.add(decision)
+            await session.flush()
+
+            with pytest.raises(AccountingResolutionError, match="cannot resolve"):
+                await resolve_reconciliation_task(
+                    session,
+                    task_id=task.task_id,
+                    decision_type="accounting_cost_basis_decision",
+                    decision_id=decision.id,
+                    resolved_by="local_user",
+                    resolved_at=NOW,
+                )
+
+
 async def test_resolve_reconciliation_task_rejects_mismatched_review_task_id(
     session_factory,
 ) -> None:
@@ -443,20 +608,25 @@ async def test_resolve_reconciliation_task_rejects_mismatched_review_task_id(
                 )
             )
             assert task is not None
-            decision = AccountingCostBasisDecision(
-                basis_key="basis:sol:mismatch",
-                decision_type="manual_cost_basis",
+            decision = AccountingExternalCashflowClassification(
+                classification_key="cashflow:sol:mismatch",
+                evidence={"source_evidence_key": "binance-sol-mismatched-decision"},
+                evidence_key="binance-sol-mismatched-decision",
+                cashflow_type="external_withdrawal",
+                movement_type="external_cashflow",
+                source="binance",
                 asset_symbol="SOL",
-                basis_scope="asset_global",
-                cost_basis_usd=Decimal("1000"),
-                effective_at=NOW,
+                quantity=Decimal("10"),
+                amount_usd=Decimal("1000"),
+                occurred_at=NOW,
+                capital_effect_usd=Decimal("-1000"),
                 confidence_state="trusted",
-                affected_metric_scopes=["asset_lifetime_pnl"],
+                materiality_usd=Decimal("1000"),
                 review_task_id="other_task",
                 created_by="local_user",
                 decision_source="manual",
                 status="active",
-                decision_reason="manual_average_cost",
+                decision_reason="manual_personal_withdrawal",
             )
             session.add(decision)
             await session.flush()
@@ -465,7 +635,60 @@ async def test_resolve_reconciliation_task_rejects_mismatched_review_task_id(
                 await resolve_reconciliation_task(
                     session,
                     task_id=task.task_id,
-                    decision_type="accounting_cost_basis_decision",
+                    decision_type="accounting_external_cashflow_classification",
+                    decision_id=decision.id,
+                    resolved_by="local_user",
+                    resolved_at=NOW,
+                )
+
+
+async def test_resolve_reconciliation_task_rejects_inactive_decision(
+    session_factory,
+) -> None:
+    movement = _movement(
+        asset_symbol="SOL",
+        quantity=Decimal("-10"),
+        evidence_key="binance-sol-inactive-decision",
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await reconcile_and_persist_movements(session, [movement])
+            task = await session.scalar(
+                select(AccountingReconciliationTask).where(
+                    AccountingReconciliationTask.task_key
+                    == "task:unknown_outgoing_transfer:binance-sol-inactive-decision"
+                )
+            )
+            assert task is not None
+            decision = AccountingExternalCashflowClassification(
+                classification_key="cashflow:sol:inactive",
+                evidence={"source_evidence_key": "binance-sol-inactive-decision"},
+                evidence_key="binance-sol-inactive-decision",
+                cashflow_type="external_withdrawal",
+                movement_type="external_cashflow",
+                source="binance",
+                asset_symbol="SOL",
+                quantity=Decimal("10"),
+                amount_usd=Decimal("1000"),
+                occurred_at=NOW,
+                capital_effect_usd=Decimal("-1000"),
+                confidence_state="trusted",
+                materiality_usd=Decimal("1000"),
+                review_task_id=task.task_id,
+                created_by="local_user",
+                decision_source="manual",
+                status="superseded",
+                decision_reason="manual_personal_withdrawal",
+            )
+            session.add(decision)
+            await session.flush()
+
+            with pytest.raises(AccountingResolutionError, match="not active"):
+                await resolve_reconciliation_task(
+                    session,
+                    task_id=task.task_id,
+                    decision_type="accounting_external_cashflow_classification",
                     decision_id=decision.id,
                     resolved_by="local_user",
                     resolved_at=NOW,
