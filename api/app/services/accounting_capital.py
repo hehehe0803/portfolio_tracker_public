@@ -26,7 +26,18 @@ SENSITIVE_BLOCKING_SCOPES = {
     "period_performance",
     "asset_level_lifetime_contribution",
     "asset_level_lifetime_pnl",
+    "asset_lifetime_pnl",
 }
+
+DERIVED_STAT_SCOPES = {
+    "current_value",
+    "current_portfolio_value",
+    "net_capital",
+    "lifetime_pnl",
+    "period_performance",
+}
+
+CASHFLOW_METRIC_SCOPES = ("net_capital", "lifetime_pnl", "period_performance")
 
 
 @dataclass
@@ -108,6 +119,7 @@ def calculate_capital_truth(
     gross_deposits = Decimal("0")
     gross_withdrawals = Decimal("0")
     impacts: list[_ConfidenceImpact] = []
+    raw_current_value = _current_value_amount(current_value)
 
     for cashflow in active_cashflows:
         cashflow_type = str(_attr(cashflow, "cashflow_type", "")).lower()
@@ -124,20 +136,31 @@ def calculate_capital_truth(
 
         cashflow_confidence = str(_attr(cashflow, "confidence_state", "trusted"))
         if cashflow_confidence != "trusted":
+            threshold_state = _threshold_state(
+                _cashflow_materiality(cashflow, amount),
+                raw_current_value,
+            )
+            state = _max_confidence([cashflow_confidence, threshold_state])
             impacts.append(
                 _ConfidenceImpact(
-                    state=cashflow_confidence,
-                    reason_code=f"cashflow_confidence_{cashflow_confidence}",
+                    state=state,
+                    reason_code=str(
+                        _attr(
+                            cashflow,
+                            "reason_code",
+                            f"cashflow_confidence_{cashflow_confidence}",
+                        )
+                    ),
                     review_task_id=_attr(cashflow, "review_task_id", None),
-                    blocked_scopes=("net_capital", "lifetime_pnl")
-                    if cashflow_confidence in {"review_required", "blocked"}
+                    blocked_scopes=CASHFLOW_METRIC_SCOPES
+                    if state == "blocked"
                     else (),
                 )
             )
 
     net_capital = gross_deposits - gross_withdrawals
     portfolio_value = _trusted_current_value_or_none(current_value, impacts)
-    threshold_value = portfolio_value or _current_value_amount(current_value)
+    threshold_value = portfolio_value or raw_current_value
 
     impacts.extend(
         _decision_impacts(
@@ -182,7 +205,7 @@ def calculate_capital_truth(
 
     confidence_state = _max_confidence(impact.state for impact in impacts)
     blocked_scopes = _blocked_scopes(impacts)
-    derived_stats_allowed = confidence_state not in {"review_required", "blocked"}
+    derived_stats_allowed = not set(blocked_scopes).intersection(DERIVED_STAT_SCOPES)
     current_value_allowed = portfolio_value is not None
 
     lifetime_pnl = None
@@ -234,22 +257,31 @@ def _trusted_current_value_or_none(
         return None
 
     coverage_reasons = {
-        "holdings_reconciled": "holdings_unresolved",
-        "broker_cash_reconciled": "broker_cash_unresolved",
-        "stablecoin_reserve_reconciled": "stablecoin_reserve_unresolved",
-        "position_existence_reconciled": "position_existence_unresolved",
+        "holdings_reconciled": ("holdings_unresolved", ("current_value",)),
+        "broker_cash_reconciled": (
+            "broker_cash_unresolved",
+            ("current_value", "broker_cash", "cash_reserve", "lifetime_pnl"),
+        ),
+        "stablecoin_reserve_reconciled": (
+            "stablecoin_reserve_unresolved",
+            ("current_value", "stablecoin_reserve", "cash_reserve", "lifetime_pnl"),
+        ),
+        "position_existence_reconciled": (
+            "position_existence_unresolved",
+            ("current_value", "position_existence", "lifetime_pnl"),
+        ),
     }
     unresolved = [
-        reason
-        for attr_name, reason in coverage_reasons.items()
+        coverage
+        for attr_name, coverage in coverage_reasons.items()
         if not bool(_attr(current_value, attr_name, False))
     ]
-    for reason in unresolved:
+    for reason, scopes in unresolved:
         impacts.append(
             _ConfidenceImpact(
                 state="blocked",
                 reason_code=reason,
-                blocked_scopes=("current_value", "lifetime_pnl", "period_performance"),
+                blocked_scopes=(*scopes, "period_performance"),
             )
         )
     confidence_state = str(_attr(current_value, "confidence_state", "trusted"))
@@ -300,8 +332,6 @@ def _impact_for_issue(
     if set(scopes).intersection(SENSITIVE_BLOCKING_SCOPES):
         state = _max_confidence([state, "blocked"])
     blocked_scopes = scopes if state == "blocked" else ()
-    if state == "review_required":
-        blocked_scopes = scopes
     return _ConfidenceImpact(
         state=state,
         reason_code=str(_attr(issue, "reason_code", "unresolved_accounting_issue")),
@@ -323,9 +353,7 @@ def _decision_impacts(
         confidence_state = str(_attr(record, "confidence_state", "trusted"))
         if confidence_state == "trusted":
             continue
-        scopes = tuple(
-            str(scope) for scope in (_attr(record, "affected_metric_scopes", ()) or ())
-        )
+        scopes = _record_scopes(record)
         threshold_state = _threshold_state(_record_materiality(record), portfolio_value)
         state = _max_confidence([confidence_state, threshold_state])
         if set(scopes).intersection(SENSITIVE_BLOCKING_SCOPES):
@@ -342,11 +370,28 @@ def _decision_impacts(
                 ),
                 review_task_id=_attr(record, "review_task_id", None),
                 blocked_scopes=scopes
-                if state in {"review_required", "blocked"}
+                if state == "blocked"
                 else (),
             )
         )
     return impacts
+
+
+def _cashflow_materiality(
+    cashflow: CapitalCashflow | Any,
+    amount: Decimal | None,
+) -> Decimal | None:
+    materiality = _decimal_or_none(_attr(cashflow, "materiality_usd", None))
+    if materiality is not None:
+        return abs(materiality)
+    return abs(amount) if amount is not None else None
+
+
+def _record_scopes(record: Any) -> tuple[str, ...]:
+    scopes = _attr(record, "affected_metric_scopes", None)
+    if scopes is None:
+        scopes = _attr(record, "approved_scope", None)
+    return tuple(str(scope) for scope in (scopes or ()))
 
 
 def _record_materiality(record: Any) -> Decimal | None:
@@ -366,14 +411,15 @@ def _threshold_state(
     amount = abs(amount_usd)
     if portfolio_value is None:
         return "provisional" if amount > Decimal("0") else "trusted"
-    warning_threshold = max(Decimal("10"), portfolio_value * Decimal("0.0001"))
+    warning_absolute = Decimal("10")
+    warning_relative = portfolio_value * Decimal("0.0001")
     provisional_threshold = max(Decimal("100"), portfolio_value * Decimal("0.01"))
     blocked_threshold = portfolio_value * Decimal("0.05")
     if amount > blocked_threshold:
         return "blocked"
     if amount > provisional_threshold:
         return "provisional"
-    if amount > warning_threshold:
+    if amount > warning_absolute or amount > warning_relative:
         return "warning"
     return "trusted"
 

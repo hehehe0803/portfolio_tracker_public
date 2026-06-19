@@ -24,6 +24,7 @@ def _cashflow(
     occurred_at: datetime,
     confidence_state: str = "trusted",
     status: str = "active",
+    materiality_usd: str | None = None,
     review_task_id: str | None = None,
 ) -> CapitalCashflow:
     return CapitalCashflow(
@@ -35,6 +36,9 @@ def _cashflow(
         occurred_at=occurred_at,
         confidence_state=confidence_state,
         status=status,
+        materiality_usd=(
+            Decimal(materiality_usd) if materiality_usd is not None else None
+        ),
         review_task_id=review_task_id,
     )
 
@@ -251,6 +255,114 @@ def test_unresolved_issue_materiality_propagates_confidence_and_reason_codes(
     assert expected_reason in summary.reason_codes
 
 
+def test_review_required_audit_context_does_not_hide_lifetime_pnl() -> None:
+    summary = calculate_capital_truth(
+        current_value=_trusted_current_value("1500"),
+        cashflows=[
+            _cashflow(
+                key="deposit-1",
+                cashflow_type="external_deposit",
+                capital_effect_usd="1000",
+                occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        ],
+        issues=[
+            CapitalIssue(
+                reason_code="audit_context_review",
+                amount_usd=Decimal("25"),
+                affected_metric_scopes=("audit_context",),
+                severity="review_required",
+                review_task_id="task_audit",
+            )
+        ],
+    )
+
+    assert summary.confidence_state == "review_required"
+    assert summary.lifetime_pnl_usd == Decimal("500")
+    assert summary.return_pct == Decimal("50.0")
+    assert summary.blocked_metric_scopes == ()
+    assert summary.top_review_task_id == "task_audit"
+
+
+def test_warning_threshold_uses_lower_or_boundary_not_maximum() -> None:
+    summary = calculate_capital_truth(
+        current_value=_trusted_current_value("1000000"),
+        cashflows=[
+            _cashflow(
+                key="deposit-1",
+                cashflow_type="external_deposit",
+                capital_effect_usd="1000",
+                occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        ],
+        issues=[
+            CapitalIssue(
+                reason_code="small_large_portfolio_issue",
+                amount_usd=Decimal("50"),
+                affected_metric_scopes=("audit_context",),
+            )
+        ],
+    )
+
+    assert summary.confidence_state == "warning"
+    assert "small_large_portfolio_issue" in summary.reason_codes
+
+
+def test_material_cashflow_confidence_blocks_sensitive_derived_stats() -> None:
+    summary = calculate_capital_truth(
+        current_value=_trusted_current_value("10000"),
+        cashflows=[
+            _cashflow(
+                key="deposit-1",
+                cashflow_type="external_deposit",
+                capital_effect_usd="1000",
+                occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+                confidence_state="warning",
+                materiality_usd="600",
+                review_task_id="task_cashflow",
+            ),
+        ],
+    )
+
+    assert summary.gross_deposits_usd == Decimal("1000")
+    assert summary.confidence_state == "blocked"
+    assert summary.lifetime_pnl_usd is None
+    assert summary.return_pct is None
+    assert "lifetime_pnl" in summary.blocked_metric_scopes
+    assert "period_performance" in summary.blocked_metric_scopes
+
+
+def test_import_approval_scope_blocks_current_value_when_low_confidence() -> None:
+    summary = calculate_capital_truth(
+        current_value=_trusted_current_value("10000"),
+        cashflows=[
+            _cashflow(
+                key="deposit-1",
+                cashflow_type="external_deposit",
+                capital_effect_usd="1000",
+                occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        ],
+        import_approvals=[
+            {
+                "approval_key": "approval-1",
+                "status": "active",
+                "confidence_state": "warning",
+                "approved_scope": ("current_value", "cash_reserve"),
+                "materiality_usd": Decimal("600"),
+                "reason_code": "import_approval_cash_gap",
+            }
+        ],
+    )
+
+    assert summary.confidence_state == "blocked"
+    assert summary.current_portfolio_value_usd == Decimal("10000")
+    assert summary.lifetime_pnl_usd is None
+    assert "current_value" in summary.blocked_metric_scopes
+    assert "cash_reserve" in summary.blocked_metric_scopes
+    assert "import_approval_cash_gap" in summary.reason_codes
+
+
 @pytest.mark.parametrize(
     ("coverage_kwargs", "reason"),
     [
@@ -284,3 +396,4 @@ def test_unresolved_current_value_coverage_blocks_current_value_and_lifetime_pnl
     assert summary.return_pct is None
     assert summary.confidence_state == "blocked"
     assert reason in summary.reason_codes
+    assert reason.removesuffix("_unresolved") in summary.blocked_metric_scopes
