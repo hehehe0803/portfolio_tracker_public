@@ -17,6 +17,18 @@ from app.db.models import (
     WatchlistItem,
     utcnow,
 )
+from app.services.accounting_review import (
+    AccountingReviewDecisionConflict,
+    AccountingReviewError,
+    AccountingReviewNotFound,
+    approve_accounting_review_decision,
+    list_open_accounting_review_tasks,
+)
+from shared.python.contracts import (
+    AccountingReviewDecisionRequest,
+    AccountingReviewDecisionResponse,
+    AccountingReviewQueue,
+)
 
 router = APIRouter(prefix="/review", tags=["review"])
 
@@ -289,6 +301,37 @@ async def review_queue(
         "allowed_decisions": ALLOWED_DECISIONS,
         "items": items,
     }
+
+
+@router.get("/accounting/tasks", response_model=AccountingReviewQueue)
+async def accounting_review_tasks(user: CurrentUser, db: DBSession):
+    return await list_open_accounting_review_tasks(db)
+
+
+@router.post(
+    "/accounting/decisions",
+    response_model=AccountingReviewDecisionResponse,
+)
+async def record_accounting_review_decision(
+    payload: AccountingReviewDecisionRequest,
+    user: CurrentUser,
+    db: DBSession,
+):
+    try:
+        response = await approve_accounting_review_decision(
+            db,
+            payload,
+            user_id=user.id,
+            username=getattr(user, "username", None) or "local_user",
+        )
+    except AccountingReviewNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AccountingReviewDecisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AccountingReviewError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return response
 
 
 @router.post("/decisions")

@@ -1,4 +1,8 @@
 import type {
+  AccountingReviewDecisionRequest,
+  AccountingReviewDecisionResponse,
+  AccountingReviewQueue,
+  AccountingReviewTask,
   AlertEventContract,
   AlertRuleContract,
   AssetSnapshot,
@@ -18,4 +22,8 @@ export type SharedContractSmoke = {
   tag: TagContract
   note: NoteContract
   ingestionEvent: IngestionEvent
+  accountingReviewTask: AccountingReviewTask
+  accountingReviewQueue: AccountingReviewQueue
+  accountingReviewDecisionRequest: AccountingReviewDecisionRequest
+  accountingReviewDecisionResponse: AccountingReviewDecisionResponse
 }

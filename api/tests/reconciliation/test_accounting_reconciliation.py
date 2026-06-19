@@ -14,8 +14,11 @@ from app.db.models import (
 )
 from app.services.accounting_reconciliation import (
     AccountingResolutionError,
+    CostBasisGapEvidence,
     MovementEvidence,
     ReconciliationResult,
+    missing_cost_basis_task,
+    reconcile_accounting_evidence,
     reconcile_and_persist_movements,
     reconcile_movements,
     resolve_reconciliation_task,
@@ -116,6 +119,95 @@ def test_parser_style_transfer_out_without_match_creates_open_task() -> None:
     task = result.reconciliation_tasks[0]
     assert task.task_type == "unknown_outgoing_transfer"
     assert task.quantity == Decimal("0.25")
+
+
+def test_missing_cost_basis_gap_creates_open_accounting_task() -> None:
+    task = missing_cost_basis_task(
+        CostBasisGapEvidence(
+            source="binance",
+            asset_symbol="SOL",
+            quantity=Decimal("5"),
+            occurred_at=NOW,
+            evidence_key="sol-lot-without-basis",
+            source_account_id="spot",
+            basis_scope="lot",
+        )
+    )
+
+    assert task.task_type == "missing_cost_basis"
+    assert task.status == "open"
+    assert task.asset_symbol == "SOL"
+    assert task.quantity == Decimal("5")
+    assert task.evidence["basis_scope"] == "lot"
+    assert task.candidate_actions == [
+        {"action": "manual_cost_basis", "effect": "trust_basis"},
+        {"action": "unknown_cost_basis", "effect": "keep_basis_blocked"},
+    ]
+
+
+def test_reconcile_accounting_evidence_includes_missing_cost_basis_tasks() -> None:
+    result = reconcile_accounting_evidence(
+        movements=[],
+        cost_basis_gaps=[
+            CostBasisGapEvidence(
+                source="binance",
+                asset_symbol="SOL",
+                quantity=Decimal("5"),
+                occurred_at=NOW,
+                evidence_key="sol-lot-without-basis",
+                basis_scope="lot",
+            )
+        ],
+    )
+
+    assert result.transfer_links == []
+    assert result.external_cashflow_classifications == []
+    assert len(result.reconciliation_tasks) == 1
+    assert result.reconciliation_tasks[0].task_type == "missing_cost_basis"
+
+
+def test_deposit_without_usd_basis_creates_missing_cost_basis_task_by_default() -> None:
+    result = _result_for(
+        _movement(
+            source="binance",
+            tx_type="deposit",
+            asset_symbol="SOL",
+            quantity=Decimal("5"),
+            evidence_key="sol-external-deposit",
+            amount_usd=None,
+        )
+    )
+
+    assert len(result.reconciliation_tasks) == 1
+    task = result.reconciliation_tasks[0]
+    assert task.task_type == "missing_cost_basis"
+    assert task.task_key == "task:missing_cost_basis:sol-external-deposit"
+    assert task.evidence["basis_scope"] == "lot"
+
+
+def test_internal_transfer_destination_does_not_create_missing_basis_task() -> None:
+    withdrawal = _movement(
+        quantity=Decimal("-5"),
+        asset_symbol="SOL",
+        destination_event_id="aster-sol-deposit",
+        evidence_key="binance-sol-withdrawal",
+        amount_usd=Decimal("750"),
+    )
+    deposit = _movement(
+        source="aster",
+        tx_type="deposit",
+        asset_symbol="SOL",
+        quantity=Decimal("5"),
+        evidence_key="aster-sol-deposit",
+        source_event_id="aster-sol-deposit",
+        occurred_at=NOW + timedelta(hours=2),
+        amount_usd=None,
+    )
+
+    result = _result_for(withdrawal, deposit)
+
+    assert len(result.transfer_links) == 1
+    assert result.reconciliation_tasks == []
 
 
 def test_parser_style_transfer_out_and_transfer_in_identifier_match() -> None:
