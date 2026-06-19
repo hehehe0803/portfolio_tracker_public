@@ -231,7 +231,7 @@ async def resolve_historical_value(
     positions: Sequence[HistoricalPosition],
     source_coverage: Sequence[SourceCoverageWindow],
     price_lookup: HistoricalPriceLookup = get_historical_price_usd,
-    transaction_ledger_complete: bool = True,
+    transaction_ledger_complete: bool = False,
     cashflow_classifications_complete: bool = True,
     accounting_decisions_complete: bool = True,
 ) -> HistoricalValueResult:
@@ -244,7 +244,12 @@ async def resolve_historical_value(
         for anchor in exact_anchors_on_date
         if anchor.value_usd is not None
     }
-    if len(exact_anchor_values) > 1:
+    has_missing_anchor_value = any(
+        anchor.value_usd is None for anchor in exact_anchors_on_date
+    )
+    if len(exact_anchor_values) > 1 or (
+        has_missing_anchor_value and bool(exact_anchor_values)
+    ):
         return HistoricalValueResult(
             as_of=as_of,
             value_usd=None,

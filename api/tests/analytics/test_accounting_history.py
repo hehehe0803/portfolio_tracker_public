@@ -64,6 +64,7 @@ async def test_reconstruction_blocks_when_historical_price_is_missing():
             )
         ],
         price_lookup=_missing_price,
+        transaction_ledger_complete=True,
     )
 
     assert result.value_usd is None
@@ -152,6 +153,7 @@ async def test_warning_source_coverage_preserves_reconstructed_value():
             )
         ],
         price_lookup=_trusted_price,
+        transaction_ledger_complete=True,
     )
 
     assert result.value_usd == Decimal("5000")

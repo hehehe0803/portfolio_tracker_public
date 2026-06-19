@@ -93,6 +93,7 @@ async def test_latest_same_day_anchor_before_boundary_beats_reconstruction():
         ],
         source_coverage=[],
         price_lookup=_historical_price,
+        transaction_ledger_complete=True,
     )
 
     assert result.value_usd == Decimal("1100")
@@ -132,6 +133,43 @@ async def test_exact_anchor_preserves_blocking_reason_codes():
     assert result.confidence_state == "blocked"
     assert result.reason_codes == ("missing_anchor_component_value",)
     assert result.sensitive_metrics_visible is False
+
+
+@pytest.mark.asyncio
+async def test_mixed_missing_and_present_anchor_values_conflict_deterministically():
+    as_of = datetime(2026, 5, 1, tzinfo=UTC)
+
+    result = await resolve_historical_value(
+        as_of=as_of,
+        exact_anchors=[
+            HistoricalValueAnchor(
+                captured_at=as_of,
+                value_usd=None,
+                source="position_snapshot",
+                confidence_state="blocked",
+                reason_codes=("missing_anchor_component_value",),
+            ),
+            HistoricalValueAnchor(
+                captured_at=as_of,
+                value_usd=Decimal("1000"),
+                source="broker_statement",
+            ),
+        ],
+        positions=[
+            HistoricalPosition(
+                symbol="BTC",
+                quantity=Decimal("1"),
+                source="binance",
+            )
+        ],
+        source_coverage=[],
+        price_lookup=_historical_price,
+    )
+
+    assert result.value_usd is None
+    assert result.source == "unavailable"
+    assert result.confidence_state == "blocked"
+    assert result.reason_codes == ("anchor_conflict",)
 
 
 @pytest.mark.asyncio
