@@ -279,6 +279,40 @@ def test_unknown_outgoing_crypto_creates_open_task_not_personal_withdrawal() -> 
     ]
 
 
+def test_negative_trade_sell_is_not_unknown_outgoing_transfer() -> None:
+    result = _result_for(
+        _movement(
+            source="binance",
+            tx_type="spot_trade_sell",
+            asset_symbol="BTC",
+            quantity=Decimal("-0.25"),
+            evidence_key="binance-btc-sell",
+            amount_usd=Decimal("15000"),
+        )
+    )
+
+    assert result.transfer_links == []
+    assert result.external_cashflow_classifications == []
+    assert result.reconciliation_tasks == []
+
+
+def test_negative_xtb_fee_is_not_external_withdrawal() -> None:
+    result = _result_for(
+        _movement(
+            source="xtb",
+            tx_type="fee",
+            asset_symbol="USD",
+            quantity=Decimal("-5"),
+            evidence_key="xtb-fee",
+            amount_usd=Decimal("5"),
+        )
+    )
+
+    assert result.transfer_links == []
+    assert result.external_cashflow_classifications == []
+    assert result.reconciliation_tasks == []
+
+
 def test_xtb_withdrawal_defaults_to_external_withdrawal() -> None:
     result = _result_for(
         _movement(
@@ -531,7 +565,7 @@ async def test_resolve_reconciliation_task_rejects_missing_decision(
                 await resolve_reconciliation_task(
                     session,
                     task_id=task.task_id,
-                    decision_type="accounting_cost_basis_decision",
+                    decision_type="accounting_external_cashflow_classification",
                     decision_id=999999,
                     resolved_by="local_user",
                     resolved_at=NOW,

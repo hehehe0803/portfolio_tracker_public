@@ -367,13 +367,11 @@ def _quantity_abs(movement: MovementEvidence) -> Decimal:
 
 def _is_outgoing(movement: MovementEvidence) -> bool:
     tx_type = movement.tx_type.lower()
-    if (
+    return _quantity_abs(movement) > Decimal("0") and (
         "withdraw" in tx_type
         or "outgoing" in tx_type
         or "transfer_out" in tx_type
-    ):
-        return _quantity_abs(movement) > Decimal("0")
-    return movement.quantity < Decimal("0") and "transfer_in" not in tx_type
+    )
 
 
 def _is_deposit(movement: MovementEvidence) -> bool:
