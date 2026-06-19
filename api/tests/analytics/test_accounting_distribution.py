@@ -179,3 +179,82 @@ def test_cash_reserve_confidence_is_scoped_to_cash_outputs() -> None:
     assert summary.percentages_visible is False
     assert summary.confidence_state == "blocked"
     assert "stablecoin_reserve_unresolved" in summary.reason_codes
+
+
+def test_cash_reserve_inherits_cash_holding_confidence() -> None:
+    summary = calculate_asset_type_distribution(
+        current_value=_trusted_current_value("1000"),
+        holdings=[
+            DistributionHolding(
+                symbol="USDC",
+                asset_type="crypto",
+                current_value_usd=Decimal("100"),
+                confidence_state="review_required",
+                reason_codes=("stablecoin_balance_unreviewed",),
+            ),
+            DistributionHolding(
+                symbol="BTC",
+                asset_type="crypto",
+                current_value_usd=Decimal("900"),
+            ),
+        ],
+    )
+
+    buckets = {bucket.asset_type: bucket for bucket in summary.asset_type_buckets}
+
+    assert buckets["cash"].confidence_state == "review_required"
+    assert summary.cash_reserve.confidence_state == "review_required"
+    assert summary.cash_reserve.reason_codes == ("stablecoin_balance_unreviewed",)
+    assert summary.confidence_state == "review_required"
+
+
+def test_missing_cash_holding_value_blocks_cash_reserve_confidence() -> None:
+    summary = calculate_asset_type_distribution(
+        current_value=_trusted_current_value("900"),
+        holdings=[
+            DistributionHolding(
+                symbol="USDT",
+                asset_type="crypto",
+                current_value_usd=None,
+                reason_codes=("missing_stablecoin_value",),
+            ),
+            DistributionHolding(
+                symbol="BTC",
+                asset_type="crypto",
+                current_value_usd=Decimal("900"),
+            ),
+        ],
+    )
+
+    buckets = {bucket.asset_type: bucket for bucket in summary.asset_type_buckets}
+
+    assert "cash" not in buckets
+    assert summary.cash_reserve.confidence_state == "blocked"
+    assert summary.cash_reserve.reason_codes == ("missing_holding_current_value",)
+    assert summary.confidence_state == "blocked"
+
+
+def test_fiat_pair_symbols_are_not_cash_reserve() -> None:
+    summary = calculate_asset_type_distribution(
+        current_value=_trusted_current_value("1000"),
+        holdings=[
+            DistributionHolding(
+                symbol="EURUSD",
+                asset_type="fiat",
+                current_value_usd=Decimal("400"),
+            ),
+            DistributionHolding(
+                symbol="USD",
+                asset_type="cash",
+                current_value_usd=Decimal("600"),
+                cash_reserve_kind="broker_cash",
+            ),
+        ],
+    )
+
+    buckets = {bucket.asset_type: bucket for bucket in summary.asset_type_buckets}
+
+    assert buckets["cash"].value_usd == Decimal("600")
+    assert buckets["other"].value_usd == Decimal("400")
+    assert summary.cash_reserve.broker_cash_usd == Decimal("600")
+    assert summary.cash_reserve.other_tracked_cash_usd == Decimal("0")

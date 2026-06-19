@@ -134,6 +134,8 @@ def calculate_asset_type_distribution(
             impact = _ConfidenceImpact("blocked", "missing_holding_current_value")
             bucket_impacts[asset_type].append(impact)
             global_impacts.append(impact)
+            if asset_type == "cash":
+                cash_impacts.append(impact)
             continue
 
         bucket_values[asset_type] += value_usd
@@ -146,6 +148,8 @@ def calculate_asset_type_distribution(
             impact = _ConfidenceImpact(holding_state, reason_code)
             bucket_impacts[asset_type].append(impact)
             global_impacts.append(impact)
+            if asset_type == "cash":
+                cash_impacts.append(impact)
 
         if asset_type != "cash":
             continue
@@ -249,7 +253,11 @@ def _distribution_asset_type(
     symbol: str,
 ) -> DistributionAssetType:
     asset_type = str(_attr(holding, "asset_type", "") or "").lower()
-    if symbol in STABLECOIN_SYMBOLS or asset_type in CASH_TYPES:
+    if symbol in STABLECOIN_SYMBOLS:
+        return "cash"
+    if asset_type in CASH_TYPES and (
+        symbol in CASH_SYMBOLS or _attr(holding, "cash_reserve_kind", None) is not None
+    ):
         return "cash"
     if asset_type == "crypto":
         return "crypto"
