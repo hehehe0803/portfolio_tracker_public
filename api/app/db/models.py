@@ -979,6 +979,121 @@ class AccountingCostBasisDecision(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class AccountingReconciliationTask(Base):
+    __tablename__ = "accounting_reconciliation_tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('open', 'resolved', 'superseded', 'voided')",
+            name="ck_accounting_reconciliation_tasks_status",
+        ),
+        CheckConstraint(
+            "severity IN ('warning', 'provisional', 'review_required', 'blocked')",
+            name="ck_accounting_reconciliation_tasks_severity",
+        ),
+        CheckConstraint(
+            "task_type IN ('unknown_outgoing_transfer', 'missing_cost_basis', "
+            "'import_approval', 'source_coverage_gap')",
+            name="ck_accounting_reconciliation_tasks_task_type",
+        ),
+        CheckConstraint(
+            "((status = 'voided' AND voided_at IS NOT NULL AND voided_by IS NOT NULL) "
+            "OR (status <> 'voided' AND voided_at IS NULL AND voided_by IS NULL))",
+            name="ck_accounting_reconciliation_tasks_void_lifecycle",
+        ),
+        CheckConstraint(
+            "((status = 'resolved' AND resolved_at IS NOT NULL "
+            "AND resolved_by IS NOT NULL "
+            "AND resolved_by_decision_type IS NOT NULL "
+            "AND resolved_by_decision_id IS NOT NULL) OR "
+            "(status <> 'resolved' AND resolved_at IS NULL "
+            "AND resolved_by IS NULL "
+            "AND resolved_by_decision_type IS NULL "
+            "AND resolved_by_decision_id IS NULL))",
+            name="ck_accounting_reconciliation_tasks_resolution_lifecycle",
+        ),
+        CheckConstraint(
+            "quantity IS NULL OR quantity >= 0",
+            name="ck_accounting_reconciliation_tasks_quantity_sanity",
+        ),
+        CheckConstraint(
+            "amount_usd IS NULL OR amount_usd >= 0",
+            name="ck_accounting_reconciliation_tasks_amount_sanity",
+        ),
+        CheckConstraint(
+            "resolved_by_decision_type IS NULL OR "
+            "resolved_by_decision_type IN ("
+            "'accounting_transfer_link', "
+            "'accounting_external_cashflow_classification', "
+            "'accounting_import_approval', "
+            "'accounting_cost_basis_decision')",
+            name="ck_accounting_reconciliation_tasks_decision_reference",
+        ),
+        Index(
+            "ix_accounting_reconciliation_tasks_source_occurred_at",
+            "source",
+            "occurred_at",
+        ),
+        Index(
+            "ix_accounting_reconciliation_tasks_status_severity",
+            "status",
+            "severity",
+        ),
+        Index(
+            "uq_accounting_reconciliation_tasks_task_id",
+            "task_id",
+            unique=True,
+        ),
+        Index(
+            "uq_accounting_reconciliation_tasks_active_key",
+            "task_key",
+            unique=True,
+            postgresql_where=text("status = 'open'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    task_key: Mapped[str] = mapped_column(String(180), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    severity: Mapped[str] = mapped_column(String(30), nullable=False)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    asset_symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(30, 10), nullable=True)
+    amount_usd: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    evidence: Mapped[dict] = mapped_column(JSON, nullable=False)
+    candidate_actions: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
+    affected_metric_scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    resolved_by_decision_type: Mapped[str | None] = mapped_column(
+        String(80), nullable=True
+    )
+    resolved_by_decision_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    created_by: Mapped[str] = mapped_column(String(80), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    resolved_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    supersedes_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("accounting_reconciliation_tasks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    voided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    voided_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    void_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class AccountingEvidenceClaim(Base):
     __tablename__ = "accounting_evidence_claims"
     __table_args__ = (

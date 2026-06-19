@@ -269,6 +269,7 @@ def _insert_cost_basis_decision(
     database_url: str,
     *,
     basis_key: str,
+    review_task_id: str | None = None,
     decision_type: str = "manual_cost_basis",
     basis_scope: str = "asset_global",
     confidence_state: str = "trusted",
@@ -294,6 +295,7 @@ def _insert_cost_basis_decision(
             created_by,
             decision_source,
             status,
+            review_task_id,
             decision_reason
         )
         VALUES (
@@ -311,6 +313,7 @@ def _insert_cost_basis_decision(
             'local_user',
             'manual',
             'active',
+            :review_task_id,
             'manual_average_cost'
         )
         """,
@@ -325,6 +328,109 @@ def _insert_cost_basis_decision(
             "confidence_state": confidence_state,
             "affected_metric_scopes": _json(["asset_lifetime_pnl"]),
             "created_at": NOW,
+            "review_task_id": review_task_id,
+        },
+    )
+
+
+def _insert_reconciliation_task(
+    database_url: str,
+    *,
+    task_id: str,
+    task_key: str,
+    status: str = "open",
+    severity: str = "review_required",
+    task_type: str = "unknown_outgoing_transfer",
+    quantity: Decimal | None = Decimal("100"),
+    amount_usd: Decimal | None = Decimal("100"),
+    voided_at: datetime | None = None,
+    voided_by: str | None = None,
+    resolved_at: datetime | None = None,
+    resolved_by: str | None = None,
+    resolved_by_decision_type: str | None = None,
+    resolved_by_decision_id: int | None = None,
+) -> None:
+    _run(
+        database_url,
+        """
+        INSERT INTO accounting_reconciliation_tasks (
+            task_id,
+            task_key,
+            task_type,
+            status,
+            severity,
+            source,
+            asset_symbol,
+            quantity,
+            amount_usd,
+            occurred_at,
+            evidence,
+            candidate_actions,
+            affected_metric_scopes,
+            resolved_by_decision_type,
+            resolved_by_decision_id,
+            created_at,
+            created_by,
+            resolved_at,
+            resolved_by,
+            voided_at,
+            voided_by
+        )
+        VALUES (
+            :task_id,
+            :task_key,
+            :task_type,
+            :status,
+            :severity,
+            'binance',
+            'USDT',
+            :quantity,
+            :amount_usd,
+            :occurred_at,
+            CAST(:evidence AS JSON),
+            CAST(:candidate_actions AS JSON),
+            CAST(:affected_metric_scopes AS JSON),
+            :resolved_by_decision_type,
+            :resolved_by_decision_id,
+            :created_at,
+            'system',
+            :resolved_at,
+            :resolved_by,
+            :voided_at,
+            :voided_by
+        )
+        """,
+        {
+            "task_id": task_id,
+            "task_key": task_key,
+            "task_type": task_type,
+            "status": status,
+            "severity": severity,
+            "quantity": quantity,
+            "amount_usd": amount_usd,
+            "occurred_at": NOW,
+            "evidence": _json({"source_event_id": "binance-withdrawal-1"}),
+            "candidate_actions": _json(
+                [
+                    {
+                        "action": "internal_transfer",
+                        "label": "Match to tracked destination",
+                    },
+                    {
+                        "action": "personal_withdrawal",
+                        "label": "Classify as external withdrawal",
+                    },
+                    {"action": "unknown", "label": "Keep unresolved"},
+                ]
+            ),
+            "affected_metric_scopes": _json(["net_capital", "lifetime_pnl"]),
+            "resolved_by_decision_type": resolved_by_decision_type,
+            "resolved_by_decision_id": resolved_by_decision_id,
+            "created_at": NOW,
+            "resolved_at": resolved_at,
+            "resolved_by": resolved_by,
+            "voided_at": voided_at,
+            "voided_by": voided_by,
         },
     )
 
@@ -456,6 +562,189 @@ def test_active_import_and_cost_basis_keys_are_unique(
     _insert_cost_basis_decision(migrated_database_url, basis_key="basis:1")
     with pytest.raises(IntegrityError):
         _insert_cost_basis_decision(migrated_database_url, basis_key="basis:1")
+
+
+def test_open_reconciliation_task_keys_are_unique(
+    migrated_database_url: str,
+) -> None:
+    _insert_reconciliation_task(
+        migrated_database_url,
+        task_id="task_unknown_outgoing_1",
+        task_key="unknown-outgoing:binance:withdrawal-1",
+    )
+
+    with pytest.raises(IntegrityError):
+        _insert_reconciliation_task(
+            migrated_database_url,
+            task_id="task_unknown_outgoing_2",
+            task_key="unknown-outgoing:binance:withdrawal-1",
+        )
+
+    _insert_reconciliation_task(
+        migrated_database_url,
+        task_id="task_unknown_outgoing_3",
+        task_key="unknown-outgoing:binance:withdrawal-1",
+        status="resolved",
+        resolved_at=NOW,
+        resolved_by="local_user",
+        resolved_by_decision_type="accounting_cost_basis_decision",
+        resolved_by_decision_id=1,
+    )
+
+
+def test_reconciliation_task_lifecycle_and_resolution_are_constrained(
+    migrated_database_url: str,
+) -> None:
+    with pytest.raises(IntegrityError):
+        _insert_reconciliation_task(
+            migrated_database_url,
+            task_id="task_bad_status",
+            task_key="task:bad-status",
+            status="active",
+        )
+
+    with pytest.raises(IntegrityError):
+        _insert_reconciliation_task(
+            migrated_database_url,
+            task_id="task_bad_severity",
+            task_key="task:bad-severity",
+            severity="trusted",
+        )
+
+    with pytest.raises(IntegrityError):
+        _insert_reconciliation_task(
+            migrated_database_url,
+            task_id="task_bad_type",
+            task_key="task:bad-type",
+            task_type="guess",
+        )
+
+    with pytest.raises(IntegrityError):
+        _insert_reconciliation_task(
+            migrated_database_url,
+            task_id="task_resolved_missing_pointer",
+            task_key="task:resolved-missing-pointer",
+            status="resolved",
+            resolved_at=NOW,
+            resolved_by="local_user",
+        )
+
+    with pytest.raises(IntegrityError):
+        _insert_reconciliation_task(
+            migrated_database_url,
+            task_id="task_open_with_resolution",
+            task_key="task:open-with-resolution",
+            resolved_at=NOW,
+            resolved_by="local_user",
+            resolved_by_decision_type="accounting_transfer_link",
+            resolved_by_decision_id=1,
+        )
+
+    with pytest.raises(IntegrityError):
+        _insert_reconciliation_task(
+            migrated_database_url,
+            task_id="task_bad_void",
+            task_key="task:bad-void",
+            voided_at=NOW,
+            voided_by="local_user",
+        )
+
+    with pytest.raises(IntegrityError):
+        _insert_reconciliation_task(
+            migrated_database_url,
+            task_id="task_negative_quantity",
+            task_key="task:negative-quantity",
+            quantity=Decimal("-1"),
+        )
+
+    with pytest.raises(IntegrityError):
+        _insert_reconciliation_task(
+            migrated_database_url,
+            task_id="task_negative_amount",
+            task_key="task:negative-amount",
+            amount_usd=Decimal("-1"),
+        )
+
+
+def test_task_resolution_and_canonical_decision_reference_each_other(
+    migrated_database_url: str,
+) -> None:
+    task_id = "task_cost_basis_missing_sol"
+    _insert_reconciliation_task(
+        migrated_database_url,
+        task_id=task_id,
+        task_key="cost-basis:sol:global",
+        task_type="missing_cost_basis",
+    )
+    _insert_cost_basis_decision(
+        migrated_database_url,
+        basis_key="basis:task-resolution",
+        review_task_id=task_id,
+    )
+
+    async def resolve_and_fetch() -> tuple[str, int, str]:
+        engine = create_async_engine(migrated_database_url)
+        try:
+            async with engine.begin() as connection:
+                decision_id = await connection.scalar(
+                    text(
+                        """
+                        SELECT id
+                        FROM accounting_cost_basis_decisions
+                        WHERE basis_key = 'basis:task-resolution'
+                        """
+                    )
+                )
+                await connection.execute(
+                    text(
+                        """
+                        UPDATE accounting_reconciliation_tasks
+                        SET status = 'resolved',
+                            resolved_at = :resolved_at,
+                            resolved_by = 'local_user',
+                            resolved_by_decision_type =
+                                'accounting_cost_basis_decision',
+                            resolved_by_decision_id = :decision_id
+                        WHERE task_id = :task_id
+                        """
+                    ),
+                    {
+                        "resolved_at": NOW,
+                        "decision_id": decision_id,
+                        "task_id": task_id,
+                    },
+                )
+                row = (
+                    await connection.execute(
+                        text(
+                            """
+                            SELECT task.resolved_by_decision_type,
+                                   task.resolved_by_decision_id,
+                                   decision.review_task_id
+                            FROM accounting_reconciliation_tasks AS task
+                            JOIN accounting_cost_basis_decisions AS decision
+                              ON decision.id = task.resolved_by_decision_id
+                            WHERE task.task_id = :task_id
+                              AND task.resolved_by_decision_type =
+                                  'accounting_cost_basis_decision'
+                            """
+                        ),
+                        {"task_id": task_id},
+                    )
+                ).one()
+                return (
+                    row.resolved_by_decision_type,
+                    row.resolved_by_decision_id,
+                    row.review_task_id,
+                )
+        finally:
+            await engine.dispose()
+
+    decision_type, decision_id, review_task_id = asyncio.run(resolve_and_fetch())
+
+    assert decision_type == "accounting_cost_basis_decision"
+    assert decision_id > 0
+    assert review_task_id == task_id
 
 
 def test_bounded_vocabularies_are_constrained(migrated_database_url: str) -> None:
@@ -761,6 +1050,7 @@ def test_live_schema_contract_includes_columns_constraints_and_partial_indexes(
         "accounting_external_cashflow_classifications",
         "accounting_import_approvals",
         "accounting_cost_basis_decisions",
+        "accounting_reconciliation_tasks",
     } <= set(schema["columns"])
     assert {
         "id",
@@ -773,15 +1063,20 @@ def test_live_schema_contract_includes_columns_constraints_and_partial_indexes(
     assert schema["columns"]["accounting_transfer_links"]["created_at"] == "NO"
     assert schema["columns"]["accounting_transfer_links"]["voided_at"] == "YES"
     assert "ck_accounting_cost_basis_decisions_unknown_not_trusted" in schema["checks"]
+    assert "ck_accounting_reconciliation_tasks_resolution_lifecycle" in schema["checks"]
     assert "ck_acct_cashflow_capital_effect" in schema["checks"]
     transfer_predicate = schema["indexes"]["uq_accounting_transfer_links_active_group"]
     cashflow_predicate = schema["indexes"]["uq_acct_cashflow_active_evidence"]
+    task_predicate = schema["indexes"]["uq_accounting_reconciliation_tasks_active_key"]
     assert "WHERE" in transfer_predicate
     assert "status" in transfer_predicate
     assert "'active'" in transfer_predicate
     assert "WHERE" in cashflow_predicate
     assert "status" in cashflow_predicate
     assert "'active'" in cashflow_predicate
+    assert "WHERE" in task_predicate
+    assert "status" in task_predicate
+    assert "'open'" in task_predicate
 
 
 def test_many_leg_transfer_overlap_is_not_claimed_as_prevented(
