@@ -206,7 +206,13 @@ def calculate_capital_truth(
     confidence_state = _max_confidence(impact.state for impact in impacts)
     blocked_scopes = _blocked_scopes(impacts)
     derived_stats_allowed = not set(blocked_scopes).intersection(DERIVED_STAT_SCOPES)
-    current_value_allowed = portfolio_value is not None
+    current_value_allowed = (
+        portfolio_value is not None
+        and not set(blocked_scopes).intersection(
+            {"current_value", "current_portfolio_value"}
+        )
+    )
+    visible_portfolio_value = portfolio_value if current_value_allowed else None
 
     lifetime_pnl = None
     return_pct = None
@@ -226,7 +232,7 @@ def calculate_capital_truth(
         gross_deposits_usd=gross_deposits,
         gross_withdrawals_usd=gross_withdrawals,
         net_capital_at_work_usd=net_capital,
-        current_portfolio_value_usd=portfolio_value,
+        current_portfolio_value_usd=visible_portfolio_value,
         lifetime_pnl_usd=lifetime_pnl,
         return_pct=return_pct,
         first_activity_date=first_activity,

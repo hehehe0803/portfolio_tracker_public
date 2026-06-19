@@ -356,7 +356,7 @@ def test_import_approval_scope_blocks_current_value_when_low_confidence() -> Non
     )
 
     assert summary.confidence_state == "blocked"
-    assert summary.current_portfolio_value_usd == Decimal("10000")
+    assert summary.current_portfolio_value_usd is None
     assert summary.lifetime_pnl_usd is None
     assert "current_value" in summary.blocked_metric_scopes
     assert "cash_reserve" in summary.blocked_metric_scopes
