@@ -12,6 +12,7 @@ Use this matrix to decide whether vNext work is complete. A ticket is not comple
 | Diff hygiene | All work | `git diff --check` or a narrower equivalent for docs-only work |
 | Worktree scope | All work | `git status --short` before and after; unrelated dirty files called out and not reverted |
 | Docs-only scope | Docs work | `git diff --name-only -- README.md AGENTS.md docs` plus status note for unrelated dirty files |
+| Planning artifact scope | Docs/superpowers planning work | `git diff --check -- .gitignore README.md AGENTS.md docs`; `git diff --name-only -- .gitignore README.md AGENTS.md docs`; `git status --short` proves new planning artifacts are tracked or intentionally ignored |
 | Protected DB safety | Schema/migration/sync/destructive/Compose work | `docs/local_prod_db_migration_runbook.md` read; backup evidence when schema touches protected data; no destructive helper pointed at `portfolio_dev` |
 | Test/smoke DB safety | Tests and smoke seeders | Database names contain `test` or `smoke`; reset helpers call `app.db.safety.assert_safe_destructive_database_url(...)` |
 | Shared contract safety | API/frontend contract work | Python and TypeScript contracts updated together; frontend shared-contract smoke passes |
@@ -34,11 +35,11 @@ An agent may not claim a ticket is complete unless:
 | VNEXT-01A | Source/movement taxonomy exists without durable writes | Classification tests for Binance, XTB, Aster, Hyperliquid, tracked wallet, cash, commodities, USDT/USDC cash rule, crypto withdrawal not sign-only | Targeted pytest for taxonomy tests; `uv run pytest api/tests/analytics api/tests/reconciliation -q` if shared analytics touched |
 | VNEXT-01B | Durable accounting state decisions are resolved before schema work | Product/plan/matrix route to the durable accounting state record with concrete durable shapes and no runtime changes | `git diff --check -- docs/product_north_star.md docs/implementation_plan.md docs/verification_matrix.md docs/architecture/durable_accounting_state_decision.md` |
 | VNEXT-01C | Durable accounting state exists for transfer links, external-cashflow classifications, import approvals, manual cost basis/unknown decisions | DB model/migration tests for constraints and relationships | `uv run pytest api/tests/db -q`; migration smoke against safe test DB only |
-| VNEXT-01D | Transfer matching creates internal movements; unknown outgoing creates tasks | Binance-to-Aster/Hyperliquid match; unmatched outgoing task; XTB default external withdrawal; internal transfer does not increase external capital | `uv run pytest api/tests/reconciliation -q` |
+| VNEXT-01D | Durable task schema exists; transfer matching creates internal movements; unknown outgoing creates tasks | Task table lifecycle/idempotency/resolution references; Binance-to-Aster/Hyperliquid match; ambiguous candidates create tasks; unmatched outgoing task; XTB default external withdrawal; internal transfer does not increase external capital | `uv run pytest api/tests/db api/tests/reconciliation -q`; schema work must read `docs/local_prod_db_migration_runbook.md`; migration smoke against safe test DB only |
 | VNEXT-02A | Capital truth contract computes net capital, lifetime P&L, capital rhythm, confidence | Net capital with deposits/withdrawals; lifetime P&L does not use gross deposits; missing/uncertain capital marks stats provisional/blocked; severe issue hides/blocks sensitive stats | `uv run pytest api/tests/analytics api/tests/api/test_portfolio_summary.py -q` or exact new test paths |
 | VNEXT-03A | Rolling 7D/30D/90D separates cashflows from investment gain | Deposit not gain; withdrawal not loss; missing anchor/low-confidence provisional; dashboard default 30D available | Targeted analytics/API tests for period contract |
 | VNEXT-04A | Historical anchors and confidence are reliable | Exact snapshot preferred; reconstruction degrades on missing transaction/price; confidence affects visibility | `uv run pytest api/tests/pricing api/tests/analytics -q` or exact new test paths |
-| VNEXT-05A | Reconciliation queue writes durable decisions | Unknown outgoing task; internal transfer approval; personal withdrawal approval; import approval; manual cost basis/unknown; audit log after durable state | `uv run pytest api/tests/review api/tests/api/test_review_queue.py api/tests/reconciliation -q` or exact new test paths |
+| VNEXT-05A | Reconciliation queue writes durable decisions and typed accounting-review contracts | Unknown outgoing task; internal transfer approval; personal withdrawal approval; import approval; manual cost basis/unknown; audit log after durable state; accounting-review Python/TypeScript contract smoke | `uv run pytest api/tests/review/test_accounting_review_semantics.py api/tests/api/test_accounting_review.py api/tests/reconciliation/test_accounting_reconciliation.py api/tests/shared/test_contract_shapes.py -q`; frontend shared-contract smoke for accounting-review request/response shapes |
 | VNEXT-05B | Accounting review UI lets user resolve durable accounting tasks | Task list; choice submission; blocked/loading/error states; accounting review separated from investment review language | Frontend targeted tests; mobile/browser smoke evidence |
 | VNEXT-06A | Asset-type distribution and cash reserve follow confidence rules | USDT/USDC cash; totals reconcile to trusted current value; weak denominator suppresses/flags percentages | Targeted analytics/API tests |
 | VNEXT-06B | Holding drivers explain rolling movement with confidence | Positive driver; negative driver; low-confidence driver flagged/omitted; no-data state | Targeted analytics/API tests |
@@ -113,14 +114,20 @@ Required evidence:
 
 Required behavior:
 
+- Durable accounting reconciliation tasks exist for unresolved outgoing crypto
+  and later manual accounting work.
 - Matched transfers among tracked venues/accounts/wallets do not increase external capital.
 - Unknown outgoing crypto transfers create reconciliation tasks.
 - Personal withdrawal remains an explicit decision path.
 
 Required tests:
 
+- Task table lifecycle, idempotency, structured evidence, and resolution
+  references.
 - Binance-to-Aster internal transfer match.
 - Binance-to-Hyperliquid internal transfer match.
+- Ambiguous exact-amount/date-only or fee/slippage candidates create review
+  tasks rather than active transfer links.
 - Unknown outgoing transfer creates task.
 - Explicit personal withdrawal classification affects external withdrawals.
 
