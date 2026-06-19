@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -82,3 +83,67 @@ class IngestionEvent(ContractBaseModel):
     status: str
     message: str | None = None
     created_at: datetime | None = None
+
+
+AccountingReviewAction = Literal[
+    "internal_transfer",
+    "personal_withdrawal",
+    "import_approval",
+    "manual_cost_basis",
+    "unknown_cost_basis",
+    "unknown",
+]
+
+
+class AccountingReviewTask(ContractBaseModel):
+    task_id: str
+    task_type: str
+    status: str
+    severity: str
+    source: str
+    asset_symbol: str
+    quantity: Decimal | None = None
+    amount_usd: Decimal | None = None
+    occurred_at: datetime
+    evidence: dict
+    candidate_actions: list[dict]
+    affected_metric_scopes: list[str]
+    created_at: datetime | None = None
+
+
+class AccountingReviewQueue(ContractBaseModel):
+    review_type: Literal["accounting"] = "accounting"
+    allowed_actions: list[AccountingReviewAction]
+    tasks: list[AccountingReviewTask]
+
+
+class InternalTransferDecision(ContractBaseModel):
+    to_source: str
+    to_evidence_key: str
+    to_quantity: Decimal
+    fee_quantity: Decimal | None = None
+    fee_asset_symbol: str | None = None
+
+
+class ManualCostBasisDecision(ContractBaseModel):
+    quantity: Decimal | None = None
+    cost_basis_usd: Decimal | None = None
+    unit_cost_usd: Decimal | None = None
+    basis_method: str | None = None
+
+
+class AccountingReviewDecisionRequest(ContractBaseModel):
+    task_id: str = Field(min_length=1, max_length=100)
+    action: AccountingReviewAction
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    rationale: str | None = None
+    internal_transfer: InternalTransferDecision | None = None
+    cost_basis: ManualCostBasisDecision | None = None
+
+
+class AccountingReviewDecisionResponse(ContractBaseModel):
+    task_id: str
+    task_status: Literal["resolved"]
+    decision_type: str
+    decision_id: int
+    replayed: bool = False

@@ -59,6 +59,17 @@ class MovementEvidence:
 
 
 @dataclass(frozen=True)
+class CostBasisGapEvidence:
+    source: str
+    asset_symbol: str
+    quantity: Decimal
+    occurred_at: datetime
+    evidence_key: str
+    source_account_id: str | None = None
+    basis_scope: str = "asset_global"
+
+
+@dataclass(frozen=True)
 class TransferLinkRecord:
     link_group_key: str
     from_evidence: dict
@@ -132,6 +143,14 @@ class ReconciliationResult:
 
 
 def reconcile_movements(movements: list[MovementEvidence]) -> ReconciliationResult:
+    return reconcile_accounting_evidence(movements=movements)
+
+
+def reconcile_accounting_evidence(
+    *,
+    movements: list[MovementEvidence],
+    cost_basis_gaps: list[CostBasisGapEvidence] | None = None,
+) -> ReconciliationResult:
     unique_movements = _dedupe_movements(movements)
     deposits = [movement for movement in unique_movements if _is_deposit(movement)]
     transfer_links: dict[str, TransferLinkRecord] = {}
@@ -161,6 +180,20 @@ def reconcile_movements(movements: list[MovementEvidence]) -> ReconciliationResu
         task = _unknown_outgoing_task(movement, candidates)
         tasks.setdefault(task.task_key, task)
 
+    linked_deposit_keys = {
+        link.to_evidence_key for link in transfer_links.values()
+    }
+    for gap in _missing_cost_basis_gaps_from_movements(
+        unique_movements,
+        linked_deposit_keys,
+    ):
+        task = missing_cost_basis_task(gap)
+        tasks.setdefault(task.task_key, task)
+
+    for gap in cost_basis_gaps or []:
+        task = missing_cost_basis_task(gap)
+        tasks.setdefault(task.task_key, task)
+
     return ReconciliationResult(
         transfer_links=list(transfer_links.values()),
         reconciliation_tasks=list(tasks.values()),
@@ -168,11 +201,49 @@ def reconcile_movements(movements: list[MovementEvidence]) -> ReconciliationResu
     )
 
 
+def missing_cost_basis_task(gap: CostBasisGapEvidence) -> ReconciliationTaskRecord:
+    task_key = _stable_key("task", "missing_cost_basis", gap.evidence_key)
+    return ReconciliationTaskRecord(
+        task_id=f"task_missing_cost_basis_{_digest(task_key)}",
+        task_key=task_key,
+        task_type="missing_cost_basis",
+        status="open",
+        severity="review_required",
+        source=gap.source.strip().lower(),
+        asset_symbol=gap.asset_symbol.strip().upper(),
+        quantity=abs(gap.quantity),
+        amount_usd=None,
+        occurred_at=_normalize_datetime(gap.occurred_at),
+        evidence={
+            "source_evidence_key": gap.evidence_key,
+            "source_account_id": gap.source_account_id,
+            "basis_scope": gap.basis_scope,
+            "reasons": ["missing_cost_basis"],
+        },
+        candidate_actions=[
+            {"action": "manual_cost_basis", "effect": "trust_basis"},
+            {"action": "unknown_cost_basis", "effect": "keep_basis_blocked"},
+        ],
+        affected_metric_scopes=[
+            "cost_basis",
+            "unrealized_pnl",
+            "lifetime_pnl",
+            "period_performance",
+        ],
+        created_by="system",
+    )
+
+
 async def reconcile_and_persist_movements(
     session: AsyncSession,
     movements: list[MovementEvidence],
+    *,
+    cost_basis_gaps: list[CostBasisGapEvidence] | None = None,
 ) -> ReconciliationResult:
-    result = reconcile_movements(movements)
+    result = reconcile_accounting_evidence(
+        movements=movements,
+        cost_basis_gaps=cost_basis_gaps,
+    )
 
     for link in result.transfer_links:
         existing_link = await session.scalar(
@@ -356,9 +427,13 @@ def _asset(movement: MovementEvidence) -> str:
 
 
 def _occurred_at(movement: MovementEvidence) -> datetime:
-    if movement.occurred_at.tzinfo is None:
-        return movement.occurred_at.replace(tzinfo=UTC)
-    return movement.occurred_at.astimezone(UTC)
+    return _normalize_datetime(movement.occurred_at)
+
+
+def _normalize_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _quantity_abs(movement: MovementEvidence) -> Decimal:
@@ -368,9 +443,7 @@ def _quantity_abs(movement: MovementEvidence) -> Decimal:
 def _is_outgoing(movement: MovementEvidence) -> bool:
     tx_type = movement.tx_type.lower()
     return _quantity_abs(movement) > Decimal("0") and (
-        "withdraw" in tx_type
-        or "outgoing" in tx_type
-        or "transfer_out" in tx_type
+        "withdraw" in tx_type or "outgoing" in tx_type or "transfer_out" in tx_type
     )
 
 
@@ -578,6 +651,31 @@ def _external_withdrawal(
         status="active",
         decision_reason="source_policy_xtb_external_withdrawal",
     )
+
+
+def _missing_cost_basis_gaps_from_movements(
+    movements: list[MovementEvidence],
+    linked_deposit_keys: set[str],
+) -> list[CostBasisGapEvidence]:
+    gaps: list[CostBasisGapEvidence] = []
+    for movement in movements:
+        if movement.evidence_key in linked_deposit_keys:
+            continue
+        if not _is_deposit(movement):
+            continue
+        if movement.amount_usd is not None:
+            continue
+        gaps.append(
+            CostBasisGapEvidence(
+                source=_source(movement),
+                asset_symbol=_asset(movement),
+                quantity=_quantity_abs(movement),
+                occurred_at=_occurred_at(movement),
+                evidence_key=movement.evidence_key,
+                basis_scope="lot",
+            )
+        )
+    return gaps
 
 
 def _evidence(movement: MovementEvidence) -> dict[str, str | None]:
