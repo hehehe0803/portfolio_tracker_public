@@ -1,3 +1,5 @@
+# ruff: noqa: S101
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
