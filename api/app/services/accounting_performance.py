@@ -123,6 +123,10 @@ def _calculate_period(
         start_at=start_at,
         end_at=as_of,
         cashflows=cashflows,
+        reference_value_usd=_period_reference_value(
+            start_boundary.value_usd,
+            end_boundary.value_usd,
+        ),
     )
     issue_impacts = _period_issue_impacts(
         start_at=start_at,
@@ -229,6 +233,7 @@ def _period_cashflows(
     start_at: datetime,
     end_at: datetime,
     cashflows: Sequence[Any],
+    reference_value_usd: Decimal | None,
 ) -> _PeriodCashflows:
     deposits = Decimal("0")
     withdrawals = Decimal("0")
@@ -247,8 +252,13 @@ def _period_cashflows(
         if amount is None:
             amount = _decimal_or_none(_attr(cashflow, "amount_usd", None))
 
-        confidence_state = _coerce_confidence_state(
+        raw_confidence_state = _coerce_confidence_state(
             str(_attr(cashflow, "confidence_state", "trusted"))
+        )
+        confidence_state = _cashflow_confidence_state(
+            cashflow,
+            raw_confidence_state=raw_confidence_state,
+            reference_value_usd=reference_value_usd,
         )
         if confidence_state != "trusted":
             confidence_states.append(confidence_state)
@@ -257,7 +267,7 @@ def _period_cashflows(
                     _attr(
                         cashflow,
                         "reason_code",
-                        f"cashflow_confidence_{confidence_state}",
+                        f"cashflow_confidence_{raw_confidence_state}",
                     )
                 )
             )
@@ -307,7 +317,7 @@ def _period_issue_impacts(
             continue
         impacts.append(
             _IssueImpact(
-                confidence_state=_issue_confidence_state(issue),
+                confidence_state="blocked",
                 reason_code=str(
                     _attr(issue, "reason_code", "unresolved_accounting_issue")
                 ),
@@ -322,6 +332,64 @@ def _issue_confidence_state(issue: Any) -> ConfidenceState:
         if state is not None:
             return _coerce_confidence_state(str(state))
     return "blocked"
+
+
+def _cashflow_confidence_state(
+    cashflow: Any,
+    *,
+    raw_confidence_state: ConfidenceState,
+    reference_value_usd: Decimal | None,
+) -> ConfidenceState:
+    if raw_confidence_state == "trusted":
+        return "trusted"
+    materiality_state = _materiality_confidence_state(
+        _cashflow_materiality(cashflow),
+        reference_value_usd,
+    )
+    return _max_confidence_state((raw_confidence_state, materiality_state))
+
+
+def _cashflow_materiality(cashflow: Any) -> Decimal | None:
+    materiality = _decimal_or_none(_attr(cashflow, "materiality_usd", None))
+    if materiality is not None:
+        return abs(materiality)
+    for attr_name in ("amount_usd", "capital_effect_usd"):
+        amount = _decimal_or_none(_attr(cashflow, attr_name, None))
+        if amount is not None:
+            return abs(amount)
+    return None
+
+
+def _materiality_confidence_state(
+    amount_usd: Decimal | None,
+    reference_value_usd: Decimal | None,
+) -> ConfidenceState:
+    if amount_usd is None:
+        return "trusted"
+    amount = abs(amount_usd)
+    if reference_value_usd is None:
+        return "provisional" if amount > Decimal("0") else "trusted"
+    warning_absolute = Decimal("10")
+    warning_relative = reference_value_usd * Decimal("0.0001")
+    provisional_threshold = max(Decimal("100"), reference_value_usd * Decimal("0.01"))
+    blocked_threshold = reference_value_usd * Decimal("0.05")
+    if amount > blocked_threshold:
+        return "blocked"
+    if amount > provisional_threshold:
+        return "provisional"
+    if amount > warning_absolute or amount > warning_relative:
+        return "warning"
+    return "trusted"
+
+
+def _period_reference_value(
+    start_value: Decimal | None,
+    end_value: Decimal | None,
+) -> Decimal | None:
+    values = [abs(value) for value in (start_value, end_value) if value is not None]
+    if not values:
+        return None
+    return max(values)
 
 
 def _investment_gain_or_none(

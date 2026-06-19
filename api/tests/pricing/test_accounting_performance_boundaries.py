@@ -126,6 +126,35 @@ def test_unresolved_cashflow_inside_period_blocks_trusted_performance() -> None:
     assert "cashflow_confidence_blocked" in period.reason_codes
 
 
+def test_material_low_confidence_cashflow_inside_period_blocks_performance() -> None:
+    summary = calculate_rolling_performance(
+        as_of=AS_OF,
+        boundary_values=[
+            _boundary(as_of=AS_OF, value_usd="1100"),
+            _boundary(as_of=AS_OF - timedelta(days=30), value_usd="1000"),
+        ],
+        cashflows=[
+            CapitalCashflow(
+                classification_key="material-warning",
+                cashflow_type="external_deposit",
+                capital_effect_usd=Decimal("50"),
+                occurred_at=AS_OF - timedelta(days=8),
+                confidence_state="warning",
+                status="active",
+                materiality_usd=Decimal("75"),
+            )
+        ],
+        periods_days=(30,),
+    )
+
+    period = _period(summary, "30D")
+
+    assert period.investment_gain_usd is None
+    assert period.confidence_state == "blocked"
+    assert period.period_performance_visible is False
+    assert "cashflow_confidence_warning" in period.reason_codes
+
+
 def test_accounting_issue_inside_period_blocks_period_performance_scope() -> None:
     summary = calculate_rolling_performance(
         as_of=AS_OF,
@@ -155,3 +184,30 @@ def test_accounting_issue_inside_period_blocks_period_performance_scope() -> Non
     assert period.confidence_state == "blocked"
     assert period.period_performance_visible is False
     assert period.reason_codes == ("unknown_outgoing_transfer",)
+
+
+def test_period_performance_issue_blocks_even_with_warning_severity() -> None:
+    summary = calculate_rolling_performance(
+        as_of=AS_OF,
+        boundary_values=[
+            _boundary(as_of=AS_OF, value_usd="1100"),
+            _boundary(as_of=AS_OF - timedelta(days=30), value_usd="1000"),
+        ],
+        cashflows=[],
+        issues=[
+            PeriodIssue(
+                reason_code="warning_period_issue",
+                affected_metric_scopes=("period_performance",),
+                occurred_at=AS_OF - timedelta(days=2),
+                severity="warning",
+            )
+        ],
+        periods_days=(30,),
+    )
+
+    period = _period(summary, "30D")
+
+    assert period.investment_gain_usd is None
+    assert period.confidence_state == "blocked"
+    assert period.period_performance_visible is False
+    assert period.reason_codes == ("warning_period_issue",)

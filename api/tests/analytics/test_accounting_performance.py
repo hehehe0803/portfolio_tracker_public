@@ -41,6 +41,7 @@ def _cashflow(
     occurred_at: datetime,
     confidence_state: str = "trusted",
     status: str = "active",
+    materiality_usd: str | None = None,
 ) -> CapitalCashflow:
     return CapitalCashflow(
         classification_key=key,
@@ -49,6 +50,9 @@ def _cashflow(
         occurred_at=occurred_at,
         confidence_state=confidence_state,
         status=status,
+        materiality_usd=(
+            Decimal(materiality_usd) if materiality_usd is not None else None
+        ),
     )
 
 
