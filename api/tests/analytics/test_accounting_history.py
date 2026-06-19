@@ -98,6 +98,70 @@ async def test_reconstruction_blocks_when_source_coverage_is_missing():
 
 
 @pytest.mark.asyncio
+async def test_reconstruction_blocks_when_transaction_ledger_is_incomplete():
+    as_of = datetime(2026, 5, 1, tzinfo=UTC)
+
+    result = await resolve_historical_value(
+        as_of=as_of,
+        exact_anchors=[],
+        positions=[
+            HistoricalPosition(
+                symbol="ETH",
+                quantity=Decimal("2"),
+                source="binance",
+            )
+        ],
+        source_coverage=[
+            SourceCoverageWindow(
+                source="binance",
+                start_at=datetime(2026, 1, 1, tzinfo=UTC),
+                end_at=datetime(2026, 12, 31, tzinfo=UTC),
+                confidence_state="trusted",
+            )
+        ],
+        price_lookup=_trusted_price,
+        transaction_ledger_complete=False,
+    )
+
+    assert result.value_usd is None
+    assert result.source == "unavailable"
+    assert result.confidence_state == "blocked"
+    assert result.reason_codes == ("missing_source_coverage",)
+
+
+@pytest.mark.asyncio
+async def test_warning_source_coverage_preserves_reconstructed_value():
+    as_of = datetime(2026, 5, 1, tzinfo=UTC)
+
+    result = await resolve_historical_value(
+        as_of=as_of,
+        exact_anchors=[],
+        positions=[
+            HistoricalPosition(
+                symbol="ETH",
+                quantity=Decimal("2"),
+                source="binance",
+            )
+        ],
+        source_coverage=[
+            SourceCoverageWindow(
+                source="binance",
+                start_at=datetime(2026, 1, 1, tzinfo=UTC),
+                end_at=datetime(2026, 12, 31, tzinfo=UTC),
+                confidence_state="warning",
+            )
+        ],
+        price_lookup=_trusted_price,
+    )
+
+    assert result.value_usd == Decimal("5000")
+    assert result.source == "reconstructed"
+    assert result.confidence_state == "warning"
+    assert result.reason_codes == ("reconstructed_value", "missing_source_coverage")
+    assert result.sensitive_metrics_visible is True
+
+
+@pytest.mark.asyncio
 async def test_conflicting_exact_anchors_block_history_value():
     as_of = datetime(2026, 5, 1, tzinfo=UTC)
 

@@ -67,6 +67,74 @@ async def test_exact_snapshot_anchor_beats_reconstruction_on_same_date():
 
 
 @pytest.mark.asyncio
+async def test_latest_same_day_anchor_before_boundary_beats_reconstruction():
+    as_of = datetime(2026, 5, 1, 18, tzinfo=UTC)
+
+    result = await resolve_historical_value(
+        as_of=as_of,
+        exact_anchors=[
+            HistoricalValueAnchor(
+                captured_at=datetime(2026, 5, 1, 9, tzinfo=UTC),
+                value_usd=Decimal("1000"),
+                source="position_snapshot",
+            ),
+            HistoricalValueAnchor(
+                captured_at=datetime(2026, 5, 1, 17, tzinfo=UTC),
+                value_usd=Decimal("1100"),
+                source="position_snapshot",
+            ),
+        ],
+        positions=[
+            HistoricalPosition(
+                symbol="BTC",
+                quantity=Decimal("1"),
+                source="binance",
+            )
+        ],
+        source_coverage=[],
+        price_lookup=_historical_price,
+    )
+
+    assert result.value_usd == Decimal("1100")
+    assert result.source == "exact_anchor"
+    assert result.confidence_state == "trusted"
+    assert result.reason_codes == ("exact_anchor",)
+
+
+@pytest.mark.asyncio
+async def test_exact_anchor_preserves_blocking_reason_codes():
+    as_of = datetime(2026, 5, 1, tzinfo=UTC)
+
+    result = await resolve_historical_value(
+        as_of=as_of,
+        exact_anchors=[
+            HistoricalValueAnchor(
+                captured_at=as_of,
+                value_usd=None,
+                source="position_snapshot",
+                confidence_state="blocked",
+                reason_codes=("missing_anchor_component_value",),
+            )
+        ],
+        positions=[
+            HistoricalPosition(
+                symbol="BTC",
+                quantity=Decimal("1"),
+                source="binance",
+            )
+        ],
+        source_coverage=[],
+        price_lookup=_historical_price,
+    )
+
+    assert result.value_usd is None
+    assert result.source == "exact_anchor"
+    assert result.confidence_state == "blocked"
+    assert result.reason_codes == ("missing_anchor_component_value",)
+    assert result.sensitive_metrics_visible is False
+
+
+@pytest.mark.asyncio
 async def test_historical_price_lookup_reports_missing_without_live_fallback():
     as_of = datetime(2026, 5, 1, tzinfo=UTC)
 

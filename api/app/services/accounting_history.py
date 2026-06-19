@@ -24,6 +24,7 @@ HistoryReasonCode = Literal[
     "missing_source_coverage",
     "missing_cashflow_classification",
     "missing_accounting_decision",
+    "missing_anchor_component_value",
     "anchor_conflict",
     "current_value_trusted_history_untrusted",
 ]
@@ -111,7 +112,19 @@ def _exact_anchors_for_date(
     as_of: datetime,
     anchors: Sequence[HistoricalValueAnchor],
 ) -> list[HistoricalValueAnchor]:
-    return [anchor for anchor in anchors if anchor.captured_at.date() == as_of.date()]
+    same_day_anchors = [
+        anchor
+        for anchor in anchors
+        if anchor.captured_at.date() == as_of.date() and anchor.captured_at <= as_of
+    ]
+    if not same_day_anchors:
+        return []
+    selected_timestamp = max(anchor.captured_at for anchor in same_day_anchors)
+    return [
+        anchor
+        for anchor in same_day_anchors
+        if anchor.captured_at == selected_timestamp
+    ]
 
 
 def _coverage_for_position(
@@ -136,10 +149,12 @@ async def _reconstruct_value(
     positions: Sequence[HistoricalPosition],
     source_coverage: Sequence[SourceCoverageWindow],
     price_lookup: HistoricalPriceLookup,
+    transaction_ledger_complete: bool,
     cashflow_classifications_complete: bool,
     accounting_decisions_complete: bool,
 ) -> HistoricalValueResult:
     reason_codes: list[HistoryReasonCode] = []
+    blocking_reason_codes: list[HistoryReasonCode] = []
     confidence_states: list[ConfidenceState] = []
     reconstructed_value = Decimal("0")
 
@@ -153,11 +168,14 @@ async def _reconstruct_value(
             sensitive_metrics_visible=False,
         )
 
+    if not transaction_ledger_complete:
+        blocking_reason_codes.append("missing_source_coverage")
+        confidence_states.append("blocked")
     if not cashflow_classifications_complete:
-        reason_codes.append("missing_cashflow_classification")
+        blocking_reason_codes.append("missing_cashflow_classification")
         confidence_states.append("blocked")
     if not accounting_decisions_complete:
-        reason_codes.append("missing_accounting_decision")
+        blocking_reason_codes.append("missing_accounting_decision")
         confidence_states.append("blocked")
 
     for position in positions:
@@ -167,7 +185,7 @@ async def _reconstruct_value(
             source_coverage=source_coverage,
         )
         if coverage is None:
-            reason_codes.append("missing_source_coverage")
+            blocking_reason_codes.append("missing_source_coverage")
             confidence_states.append("blocked")
             continue
         confidence_states.append(coverage.confidence_state)
@@ -176,19 +194,21 @@ async def _reconstruct_value(
 
         price_result = await price_lookup(position.symbol, as_of)
         if price_result.price_usd is None:
-            reason_codes.append(_price_reason_code(price_result.reason_code))
+            blocking_reason_codes.append(_price_reason_code(price_result.reason_code))
             confidence_states.append("blocked")
             continue
         reconstructed_value += position.quantity * price_result.price_usd
 
-    if reason_codes:
+    if blocking_reason_codes:
         confidence_state = _max_confidence_state(confidence_states)
         return HistoricalValueResult(
             as_of=as_of,
             value_usd=None,
             source="unavailable",
             confidence_state=confidence_state,
-            reason_codes=_dedupe_reason_codes(reason_codes),
+            reason_codes=_dedupe_reason_codes(
+                [*reason_codes, *blocking_reason_codes]
+            ),
             sensitive_metrics_visible=False,
         )
 
@@ -197,7 +217,7 @@ async def _reconstruct_value(
         value_usd=reconstructed_value,
         source="reconstructed",
         confidence_state=_max_confidence_state(confidence_states),
-        reason_codes=("reconstructed_value",),
+        reason_codes=_dedupe_reason_codes(["reconstructed_value", *reason_codes]),
         sensitive_metrics_visible=_sensitive_metrics_visible(
             _max_confidence_state(confidence_states)
         ),
@@ -211,6 +231,7 @@ async def resolve_historical_value(
     positions: Sequence[HistoricalPosition],
     source_coverage: Sequence[SourceCoverageWindow],
     price_lookup: HistoricalPriceLookup = get_historical_price_usd,
+    transaction_ledger_complete: bool = True,
     cashflow_classifications_complete: bool = True,
     accounting_decisions_complete: bool = True,
 ) -> HistoricalValueResult:
@@ -223,9 +244,7 @@ async def resolve_historical_value(
         for anchor in exact_anchors_on_date
         if anchor.value_usd is not None
     }
-    if len(exact_anchor_values) > 1 or any(
-        anchor.value_usd is None for anchor in exact_anchors_on_date
-    ):
+    if len(exact_anchor_values) > 1:
         return HistoricalValueResult(
             as_of=as_of,
             value_usd=None,
@@ -238,12 +257,19 @@ async def resolve_historical_value(
         confidence_state = _max_confidence_state(
             [anchor.confidence_state for anchor in exact_anchors_on_date]
         )
+        reason_codes = _dedupe_reason_codes(
+            [
+                reason_code
+                for anchor in exact_anchors_on_date
+                for reason_code in (anchor.reason_codes or ("exact_anchor",))
+            ]
+        )
         return HistoricalValueResult(
             as_of=as_of,
             value_usd=exact_anchors_on_date[0].value_usd,
             source="exact_anchor",
             confidence_state=confidence_state,
-            reason_codes=("exact_anchor",),
+            reason_codes=reason_codes,
             sensitive_metrics_visible=_sensitive_metrics_visible(confidence_state),
         )
 
@@ -252,6 +278,7 @@ async def resolve_historical_value(
         positions=positions,
         source_coverage=source_coverage,
         price_lookup=price_lookup,
+        transaction_ledger_complete=transaction_ledger_complete,
         cashflow_classifications_complete=cashflow_classifications_complete,
         accounting_decisions_complete=accounting_decisions_complete,
     )
