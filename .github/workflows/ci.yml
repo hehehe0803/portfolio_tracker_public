@@ -1,0 +1,263 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  classify-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: classify
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          if [[ "$base" == "0000000000000000000000000000000000000000" ]]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$base" "$head")"
+          docs_only=true
+
+          if [[ -z "$changed_files" ]]; then
+            docs_only=false
+          fi
+
+          while IFS= read -r changed_file; do
+            [[ -z "$changed_file" ]] && continue
+            case "$changed_file" in
+              docs/*|README.md|AGENTS.md|CLAUDE.md|data/README.md)
+                ;;
+              *)
+                docs_only=false
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          echo "Changed files:"
+          printf '%s\n' "$changed_files"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+  docs-only:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run docs-only verification
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          git diff --check "$base" "$head"
+
+  verify:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: portfolio
+          POSTGRES_PASSWORD: portfolio
+          POSTGRES_DB: portfolio_backend_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U portfolio -d portfolio_backend_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://portfolio:portfolio@127.0.0.1:5433/portfolio_backend_test
+      TEST_DATABASE_URL: postgresql+asyncpg://portfolio:portfolio@127.0.0.1:5433/portfolio_backend_test
+      TEST_DATABASE_BASE_URL: postgresql+asyncpg://portfolio:portfolio@127.0.0.1:5433/postgres
+      SCHEMA_TEST_DATABASE_URL: postgresql+asyncpg://portfolio:portfolio@127.0.0.1:5433/postgres
+      REDIS_URL: redis://127.0.0.1:6379/0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python dependencies
+        run: uv sync --extra api --extra worker --extra shared --extra dev --extra binance
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep poppler-utils
+
+      - name: Provision backend test database
+        run: uv run --extra api --extra shared python api/scripts/provision_test_database.py --database-url "$TEST_DATABASE_URL" --recreate
+
+      - name: Install Playwright browsers
+        run: npm --workspace frontend exec playwright install --with-deps chromium
+
+      - name: Run static verification checks
+        timeout-minutes: 5
+        run: scripts/verify_all.sh static
+
+      - name: Run backend tests (app, analytics, broker parsers)
+        timeout-minutes: 12
+        run: >
+          uv run --extra dev --extra api --extra shared --extra binance --extra worker
+          pytest
+          api/tests/alerts
+          api/tests/analytics
+          api/tests/api
+          api/tests/binance
+          api/tests/crypto
+          -vv
+          --durations=20
+          -o faulthandler_timeout=120
+
+      - name: Run backend tests (db)
+        timeout-minutes: 8
+        run: >
+          uv run --extra dev --extra api --extra shared --extra binance --extra worker
+          pytest
+          api/tests/db
+          -vv
+          --durations=20
+          -o faulthandler_timeout=120
+
+      - name: Run backend tests (pricing state)
+        timeout-minutes: 8
+        run: >
+          uv run --extra dev --extra api --extra shared --extra binance --extra worker
+          pytest
+          api/tests/pricing/test_portfolio_state.py
+          -vv
+          --durations=20
+          -o faulthandler_timeout=120
+
+      - name: Run backend tests (pricing time series)
+        timeout-minutes: 8
+        run: >
+          uv run --extra dev --extra api --extra shared --extra binance --extra worker
+          pytest
+          api/tests/pricing/test_portfolio_time_series.py
+          -vv
+          --durations=20
+          -o faulthandler_timeout=120
+
+      - name: Run backend tests (pricing providers)
+        timeout-minutes: 8
+        run: >
+          uv run --extra dev --extra api --extra shared --extra binance --extra worker
+          pytest
+          api/tests/pricing/test_price_snapshot.py
+          api/tests/pricing/test_providers.py
+          -vv
+          --durations=20
+          -o faulthandler_timeout=120
+
+      - name: Run backend tests (reconciliation, review)
+        timeout-minutes: 8
+        run: >
+          uv run --extra dev --extra api --extra shared --extra binance --extra worker
+          pytest
+          api/tests/reconciliation
+          api/tests/review
+          -vv
+          --durations=20
+          -o faulthandler_timeout=120
+
+      - name: Run backend tests (security, worker, XTB)
+        timeout-minutes: 12
+        run: >
+          uv run --extra dev --extra api --extra shared --extra binance --extra worker
+          pytest
+          api/tests/security
+          api/tests/shared
+          api/tests/test_ci_workflow.py
+          api/tests/test_verify_all_script.py
+          api/tests/worker
+          api/tests/xtb
+          -vv
+          --durations=20
+          -o faulthandler_timeout=120
+
+      - name: Run frontend shared-contract smoke
+        timeout-minutes: 5
+        run: scripts/verify_all.sh shared-contracts
+
+      - name: Run frontend lint
+        timeout-minutes: 5
+        run: make lint
+
+      - name: Run frontend typecheck
+        timeout-minutes: 5
+        run: make typecheck
+
+      - name: Run Playwright smoke tests
+        timeout-minutes: 15
+        run: make e2e

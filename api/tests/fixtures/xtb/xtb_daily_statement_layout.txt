@@ -1,0 +1,37 @@
+Xac nhan cac lenh da thuc hien 12/05/2026
+Ho va Ten                     Tai khoan                          Don vi Tien te cua Tai khoan      So du                           Gia tri Tai khoan                  Gia tri Co phieu                      Ky quy                                    Von ranh roi
+REDACTED                      REDACTED                           USD                               165,35                          22.674,49                          22.509,14                             0,00                                      165,35
+
+
+
+
+Lenh mua OMI da thuc hien (3)
+
+So     Ma Lenh      Ky Hieu               Ten Cong Cu     He Thong Thuc        Loai Lenh    Khoi Luong      Ngay va Gio Giao   Lenh Mo            Gia Giao Dich     Tong Gia Tri         Loai Tai San        Don Vi Tien Te          Ty Gia Hoi Doai         Chi Phi Chuyen         Hoa Hong                Tong Chi Phi
+Thu                                                       Hien Lenh                                         Dich                                                                                             Quote Cua Cong                                  Doi
+Tu                                                                                                                                                                                                            Cu
+
+1      2565559355   ISLN.UK               iShares, ACC,   XOFF                                      2.0000 12/05/2026          market                    79,57250          159,14500     ETC                 USD                                1.0000                     0,00                     0,00                     0,00
+                                          USD                                                              09:03:54
+
+2      2565562635   IGLN.UK               iShares, ACC,   XOFF                                      4.0000 12/05/2026          market                    91,02490          364,09960     ETC                 USD                                1.0000                     0,00                     0,00                     0,00
+                                          USD                                                              09:04:17
+
+3      2565576692   LAC.US                Lithium         KNEM                                     17.0000 12/05/2026          market                     5,69000           96,73000     Cash Stocks         USD                                1.0000                     0,00                     0,00                     0,00
+                                          Americas Corp                                                    15:30:02
+
+
+Lenh mua Co Phieu Le da duoc thuc hien (3)
+
+So    Ma Lenh      Ten cua cong cu    Ky hieu lien quan   He Thong Thuc   Loai Lenh   Khoi Luong     Ngay va Gio Giao   Lenh Mo   Gia Giao Dich     Tong Gia Tri       Loai Tai San        Don Vi Tien Te          Ty Gia Hoi Doai         Chi Phi Chuyen         Hoa Hong                Tong Chi Phi
+Thu                lien quan toi co   den co phieu le     Hien Lenh                                  Dich                                                                                  Quote Cua Cong                                  Doi
+Tu                 phieu le                                                                                                                                                                Cu
+
+1     2565559355   ISLN.UK            iShares, ACC,       XTB                                 0.5119 12/05/2026         market           79,61000           40,75236   ETC                 USD                                1.0000                     0,00                     0,00                     0,00
+                                      USD                                                            09:03:53
+
+2     2565562635   IGLN.UK            iShares, ACC,       XTB                                 0.3942 12/05/2026         market           91,05000           35,89191   ETC                 USD                                1.0000                     0,00                     0,00                     0,00
+                                      USD                                                            09:04:16
+
+3     2565576692   LAC.US             Lithium             XTB                                 0.2711 12/05/2026         market            5,65000            1,53172   Cash Stocks         USD                                1.0000                     0,00                     0,00                     0,00
+                                      Americas Corp                                                  15:30:30

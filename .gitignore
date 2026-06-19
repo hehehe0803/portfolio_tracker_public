@@ -1,0 +1,61 @@
+# Dependency directories
+node_modules/
+.venv/
+.eggs/
+*.egg-info/
+
+# Build outputs
+.next/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Python caches
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Editor settings
+.idea/
+.vscode/
+*.swp
+
+# Environment & secrets
+.env
+.env.*
+*.pem
+
+# Logs & runtime artifacts
+*.log
+*.sqlite
+.DS_Store
+.agent/
+.worktrees/
+backups/
+*.dump
+frontend/test-results/
+
+# Terraform & compose generated state
+.terraform/
+terraform.tfstate*
+
+# Misc
+*.local
+yarn.lock
+.serena/
+.superpowers/
+docs/superpowers/*
+!docs/superpowers/specs/
+!docs/superpowers/plans/
+docs/superpowers/specs/*
+docs/superpowers/plans/*
+!docs/superpowers/specs/current-vnext-design.md
+!docs/superpowers/specs/2026-06-17-major-revamp-roadmap.md
+!docs/superpowers/plans/2026-06-17-reconciliation-mvp-plan.md
+!docs/superpowers/plans/2026-06-18-vnext-01c-durable-accounting-state-schema.md
+.hermes/
+data/*
+!data/README.md

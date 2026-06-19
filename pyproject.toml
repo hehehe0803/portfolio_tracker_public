@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=69.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "portfolio-tracker"
+version = "0.1.0"
+description = "Shared Python configuration for the portfolio tracker services."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "pydantic>=2.6.1",
+]
+
+[project.optional-dependencies]
+api = [
+  "fastapi>=0.119.0",
+  "uvicorn[standard]>=0.37.0",
+  "sqlalchemy[asyncio]>=2.0.25",
+  "alembic>=1.13.1",
+  "asyncpg>=0.30.0",
+  "httpx>=0.26.0",
+  "python-multipart>=0.0.9",
+  "pyjwt[crypto]>=2.8.0",
+  "bcrypt>=4.0.0",
+  "pyotp>=2.9.0",
+  "qrcode[pil]>=7.4.2",
+  "apscheduler>=3.10.4",
+  "tenacity>=8.2.3",
+  "openpyxl>=3.1.2",
+  "redis>=5.0.1",
+]
+worker = [
+  "redis>=5.0.1",
+  "rq>=2.7.0",
+]
+shared = [
+  "pydantic-settings>=2.2.1",
+]
+binance = [
+  "binance-connector>=3.11.0",
+]
+dev = [
+  "pytest>=8.0.2",
+  "pytest-asyncio>=0.23.5",
+  "httpx>=0.26.0",
+  "ruff>=0.3.0",
+  "pyright>=1.1.350",
+  "types-redis>=4.6.0.20240118",
+  "types-requests>=2.31.0.20240218",
+  "pytest-mock>=3.12.0",
+  "fakeredis>=2.31.0",
+]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["api", "."]
+
+[tool.setuptools.packages.find]
+include = ["shared*"]
+namespaces = true

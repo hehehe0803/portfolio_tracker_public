@@ -1,0 +1,83 @@
+# ===== Minimal worktree helpers =====
+
+# Resolve repo root or bail if not inside a git repo
+_git_root() { git rev-parse --show-toplevel 2>/dev/null || return 1; }
+
+# Pick a sensible default base (main if present, otherwise master, otherwise current HEAD)
+_default_base() {
+  git show-ref --verify --quiet refs/heads/main && echo "main" && return
+  git show-ref --verify --quiet refs/heads/master && echo "master" && return
+  echo "$(git rev-parse --abbrev-ref HEAD)"
+}
+
+# Resolve the primary worktree root (works from any worktree)
+_wt_main_root() {
+  local root="$(_git_root)" || return 1
+  local common
+  common="$(git -C "$root" rev-parse --git-common-dir)" || return 1
+  case "$common" in /*) ;; *) common="$root/$common" ;; esac
+  echo "$(cd "$(dirname "$common")" && pwd)"
+}
+
+# Compute worktree root given a repo root
+_wt_root_for_repo() {
+  local root="$1"
+  local name="$(basename "$root")"
+  echo "$(cd "$root/.." && pwd)/${name}.worktrees"
+}
+
+# gwa <branch> [base] — create a new worktree + branch
+# Example: gwa ingest-xtb-001
+
+gwa() {
+  local branch="$1"; local base
+  if [ -z "$branch" ]; then echo "usage: gwa <branch> [base-branch]"; return 1; fi
+  local repo_root="$(_wt_main_root)" || { echo "Not inside a git repo"; return 1; }
+  base="${2:-$(cd "$repo_root" && _default_base)}"
+  local wt_root="$(_wt_root_for_repo "$repo_root")"
+  local wt_path="$wt_root/$branch"
+  mkdir -p "$wt_root"
+  ( cd "$repo_root" && git worktree add -b "$branch" "$wt_path" "$base" ) || return 1
+  echo "Worktree ready: $wt_path (branch: $branch, base: $base)"
+}
+
+# gwl — list worktrees
+
+gwl() {
+  local repo_root="$(_wt_main_root)" || { echo "Not inside a git repo"; return 1; }
+  ( cd "$repo_root" && git worktree list )
+}
+
+# gwcd [branch] — jump to a worktree or back to the main repo root
+
+gwcd() {
+  local repo_root="$(_wt_main_root)" || { echo "Not inside a git repo"; return 1; }
+  if [ -z "${1:-}" ]; then
+    cd "$repo_root" || return 1
+    return 0
+  fi
+  local wt_root="$(_wt_root_for_repo "$repo_root")" || return 1
+  local path="$wt_root/$1"
+  cd "$path" 2>/dev/null || { echo "No such worktree: $1"; return 1; }
+}
+
+# gwd — remove current worktree and its local branch (safe guard for main)
+
+gwd() {
+  local worktree_root="$(_git_root)" || { echo "Not inside a git repo"; return 1; }
+  local repo_root="$(_wt_main_root)" || return 1
+  if [ "$worktree_root" = "$repo_root" ]; then
+    echo "Refusing to remove main worktree: $repo_root"
+    return 1
+  fi
+  local branch
+  branch="$(git -C "$worktree_root" rev-parse --abbrev-ref HEAD)"
+  if [ "$branch" = "HEAD" ]; then
+    echo "Refusing to remove a detached HEAD worktree."
+    return 1
+  fi
+  ( cd "$repo_root" && git worktree remove "$worktree_root" ) || return 1
+  ( cd "$repo_root" && git branch -d "$branch" 2>/dev/null || true )
+  echo "Removed worktree and local branch: $branch"
+}
+# ===== end helpers =====

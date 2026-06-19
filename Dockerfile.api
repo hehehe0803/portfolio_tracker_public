@@ -1,0 +1,15 @@
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PYTHONPATH=/app/api:/app
+
+COPY pyproject.toml uv.lock README.md ./
+COPY api ./api
+COPY worker ./worker
+COPY shared ./shared
+
+RUN uv sync --frozen --extra api --extra worker --extra shared --extra binance --no-dev
