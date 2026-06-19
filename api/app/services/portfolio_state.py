@@ -52,6 +52,16 @@ class BenchmarkAggregatePoint:
     price_usd: Decimal
 
 
+@dataclass(frozen=True)
+class PortfolioValueAnchor:
+    captured_at: datetime
+    value_usd: Decimal | None
+    source: str
+    confidence_state: str
+    reason_codes: tuple[str, ...]
+    component_count: int
+
+
 @dataclass
 class PortfolioStateRefreshResult:
     captured_at: datetime
@@ -79,6 +89,72 @@ def _canonicalize_holdings(holdings: list[HoldingStats]) -> list[HoldingStats]:
         raise ValueError(f"Duplicate holding symbols are not allowed: {duplicates}")
 
     return holdings
+
+
+def build_portfolio_value_anchor(
+    *,
+    captured_at: datetime,
+    component_values_usd: list[Decimal | None],
+    source: str = "position_snapshot",
+) -> PortfolioValueAnchor:
+    if any(value is None for value in component_values_usd):
+        return PortfolioValueAnchor(
+            captured_at=captured_at,
+            value_usd=None,
+            source=source,
+            confidence_state="blocked",
+            reason_codes=("missing_anchor_component_value",),
+            component_count=len(component_values_usd),
+        )
+
+    present_component_values = [
+        value for value in component_values_usd if value is not None
+    ]
+    return PortfolioValueAnchor(
+        captured_at=captured_at,
+        value_usd=sum(present_component_values, Decimal("0")),
+        source=source,
+        confidence_state="trusted",
+        reason_codes=("exact_anchor",),
+        component_count=len(component_values_usd),
+    )
+
+
+async def list_portfolio_value_anchors(
+    session: AsyncSession,
+    *,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+) -> list[PortfolioValueAnchor]:
+    filters = [Asset.symbol != EMPTY_PORTFOLIO_SNAPSHOT_SYMBOL]
+    if start_at is not None:
+        filters.append(PositionSnapshot.captured_at >= start_at)
+    if end_at is not None:
+        filters.append(PositionSnapshot.captured_at <= end_at)
+
+    rows = (
+        await session.execute(
+            select(
+                PositionSnapshot.captured_at,
+                PositionSnapshot.current_value_usd,
+            )
+            .join(Asset, Asset.id == PositionSnapshot.asset_id)
+            .where(*filters)
+            .order_by(PositionSnapshot.captured_at.asc(), Asset.symbol.asc())
+        )
+    ).all()
+
+    values_by_timestamp: dict[datetime, list[Decimal | None]] = {}
+    for captured_at, current_value_usd in rows:
+        values_by_timestamp.setdefault(captured_at, []).append(current_value_usd)
+
+    return [
+        build_portfolio_value_anchor(
+            captured_at=captured_at,
+            component_values_usd=component_values_usd,
+        )
+        for captured_at, component_values_usd in values_by_timestamp.items()
+    ]
 
 
 def _aggregate_view_name(

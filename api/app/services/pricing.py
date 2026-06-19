@@ -1,6 +1,10 @@
 """Pricing service: Binance for crypto, Yahoo Finance for everything else."""
 
 import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
 
 import httpx
 import redis.asyncio as aioredis
@@ -28,6 +32,21 @@ BINANCE_ALIAS_SYMBOLS: dict[str, tuple[str, ...]] = {
     "WETH": ("ETH",),
     "BNSOL": ("SOL",),
 }
+
+HistoricalPriceReasonCode = str
+HistoricalPriceProvider = Callable[
+    [str, datetime],
+    Awaitable[Decimal | float | str | None],
+]
+
+
+@dataclass(frozen=True)
+class HistoricalPriceResult:
+    symbol: str
+    as_of: datetime
+    price_usd: Decimal | None
+    reason_code: HistoricalPriceReasonCode | None
+
 
 CRYPTO_SYMBOLS: set[str] = {
     "BTC",
@@ -160,6 +179,45 @@ async def get_price_usd(symbol: str) -> float | None:
         await _cache_set_float(cache_key, ttl, price)
 
     return price
+
+
+async def get_historical_price_usd(
+    symbol: str,
+    as_of: datetime,
+    *,
+    provider: HistoricalPriceProvider | None = None,
+) -> HistoricalPriceResult:
+    """Return a historical USD price without falling back to live/current quotes."""
+    normalized = symbol.upper()
+    if normalized in STABLE_VALUE_SYMBOLS:
+        return HistoricalPriceResult(
+            symbol=normalized,
+            as_of=as_of,
+            price_usd=Decimal("1"),
+            reason_code=None,
+        )
+    if provider is None:
+        return HistoricalPriceResult(
+            symbol=normalized,
+            as_of=as_of,
+            price_usd=None,
+            reason_code="missing_historical_price",
+        )
+
+    price = await provider(normalized, as_of)
+    if price is None:
+        return HistoricalPriceResult(
+            symbol=normalized,
+            as_of=as_of,
+            price_usd=None,
+            reason_code="missing_historical_price",
+        )
+    return HistoricalPriceResult(
+        symbol=normalized,
+        as_of=as_of,
+        price_usd=Decimal(str(price)),
+        reason_code=None,
+    )
 
 
 async def _fetch_price(symbol: str) -> float | None:
