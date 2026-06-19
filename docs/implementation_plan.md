@@ -223,9 +223,19 @@ Depends on:
 
 Allowed write set:
 
+- Serialized task-schema precursor, only after explicit user approval:
+  `api/app/db/models.py`, Alembic migration files, and `api/tests/db/`.
 - Accounting/reconciliation services under `api/app/services/`.
 - Reconciliation tests under `api/tests/reconciliation/`.
 - API tests only if task creation is exposed immediately.
+
+Safety:
+
+- Schema precursor work must read `docs/local_prod_db_migration_runbook.md`.
+- Do not run migrations against `portfolio_dev` without backup/restore-drill
+  evidence and explicit approval.
+- The durable task table must be implemented before transfer matching service
+  work can claim unresolved outgoing transfer tasks are durable.
 
 Required behavior:
 
@@ -236,6 +246,7 @@ Required behavior:
 
 Acceptance:
 
+- Durable accounting task schema exists for unresolved reconciliation tasks.
 - Tests cover matched transfer, unmatched outgoing transfer, and XTB default external withdrawal.
 - Durable task state is written for unknown outgoing transfer.
 
@@ -342,7 +353,12 @@ Allowed write set:
 
 - Reconciliation services.
 - `api/app/api/v1/review.py` or a new accounting-review route.
+- `api/app/main.py` only if a new accounting-review route file is added.
+- `shared/python/contracts.py` and `shared/typescript/contracts.ts` for
+  accounting-review request/response models consumed by frontend code.
 - API tests under `api/tests/api/` and `api/tests/review/`.
+- Shared-contract smoke target when request/response models are exposed to
+  frontend code.
 - Frontend is out of scope unless explicitly split into a separate UI ticket.
 
 Required behavior:
@@ -354,6 +370,8 @@ Required behavior:
 Acceptance:
 
 - Tests prove unknown outgoing transfer task, internal transfer approval, personal withdrawal approval, import approval, manual cost-basis/unknown decision, and audit log after durable state.
+- Accounting-review Python and TypeScript request/response contracts stay
+  synchronized before VNEXT-05B consumes them.
 
 ## VNEXT-05B: Accounting Review UI
 
