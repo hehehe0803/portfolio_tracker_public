@@ -5,9 +5,33 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import (
+    AccountingCostBasisDecision,
+    AccountingExternalCashflowClassification,
+    AccountingImportApproval,
+    AccountingReconciliationTask,
+    AccountingTransferLink,
+)
+
 TRACKED_CRYPTO_SOURCES = {"binance", "aster", "hyperliquid", "tracked_wallet"}
 TRANSFER_DESTINATIONS = {"aster", "hyperliquid", "tracked_wallet", "binance"}
 TRANSFER_WINDOW = timedelta(days=2)
+
+DECISION_MODELS = {
+    "accounting_transfer_link": AccountingTransferLink,
+    "accounting_external_cashflow_classification": (
+        AccountingExternalCashflowClassification
+    ),
+    "accounting_import_approval": AccountingImportApproval,
+    "accounting_cost_basis_decision": AccountingCostBasisDecision,
+}
+
+
+class AccountingResolutionError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -131,6 +155,170 @@ def reconcile_movements(movements: list[MovementEvidence]) -> ReconciliationResu
         transfer_links=list(transfer_links.values()),
         reconciliation_tasks=list(tasks.values()),
         external_cashflow_classifications=list(cashflows.values()),
+    )
+
+
+async def reconcile_and_persist_movements(
+    session: AsyncSession,
+    movements: list[MovementEvidence],
+) -> ReconciliationResult:
+    result = reconcile_movements(movements)
+
+    for link in result.transfer_links:
+        existing_link = await session.scalar(
+            select(AccountingTransferLink).where(
+                AccountingTransferLink.status == "active",
+                or_(
+                    AccountingTransferLink.link_group_key == link.link_group_key,
+                    AccountingTransferLink.from_evidence_key == link.from_evidence_key,
+                    AccountingTransferLink.to_evidence_key == link.to_evidence_key,
+                ),
+            )
+        )
+        if existing_link is None:
+            session.add(_transfer_link_model(link))
+
+    for task in result.reconciliation_tasks:
+        existing_task = await session.scalar(
+            select(AccountingReconciliationTask).where(
+                AccountingReconciliationTask.status == "open",
+                AccountingReconciliationTask.task_key == task.task_key,
+            )
+        )
+        if existing_task is None:
+            session.add(_task_model(task))
+
+    for cashflow in result.external_cashflow_classifications:
+        existing_cashflow = await session.scalar(
+            select(AccountingExternalCashflowClassification).where(
+                AccountingExternalCashflowClassification.status == "active",
+                or_(
+                    AccountingExternalCashflowClassification.classification_key
+                    == cashflow.classification_key,
+                    AccountingExternalCashflowClassification.evidence_key
+                    == cashflow.evidence_key,
+                ),
+            )
+        )
+        if existing_cashflow is None:
+            session.add(_cashflow_model(cashflow))
+
+    await session.flush()
+    return result
+
+
+async def resolve_reconciliation_task(
+    session: AsyncSession,
+    *,
+    task_id: str,
+    decision_type: str,
+    decision_id: int,
+    resolved_by: str,
+    resolved_at: datetime | None = None,
+) -> AccountingReconciliationTask:
+    task = await session.scalar(
+        select(AccountingReconciliationTask).where(
+            AccountingReconciliationTask.task_id == task_id
+        )
+    )
+    if task is None:
+        raise AccountingResolutionError(f"task {task_id!r} does not exist")
+    if task.status != "open":
+        raise AccountingResolutionError(f"task {task_id!r} is not open")
+
+    decision_model = DECISION_MODELS.get(decision_type)
+    if decision_model is None:
+        raise AccountingResolutionError(
+            f"decision type {decision_type!r} is not supported"
+        )
+
+    decision = await session.get(decision_model, decision_id)
+    if decision is None:
+        raise AccountingResolutionError(
+            f"{decision_type} id {decision_id!r} does not exist"
+        )
+    if decision.review_task_id != task.task_id:
+        raise AccountingResolutionError(
+            f"{decision_type} id {decision_id!r} review_task_id does not match "
+            f"task {task.task_id!r}"
+        )
+
+    task.status = "resolved"
+    task.resolved_at = resolved_at or datetime.now(UTC)
+    task.resolved_by = resolved_by
+    task.resolved_by_decision_type = decision_type
+    task.resolved_by_decision_id = decision_id
+    await session.flush()
+    return task
+
+
+def _transfer_link_model(link: TransferLinkRecord) -> AccountingTransferLink:
+    return AccountingTransferLink(
+        link_group_key=link.link_group_key,
+        from_evidence=link.from_evidence,
+        to_evidence=link.to_evidence,
+        from_evidence_key=link.from_evidence_key,
+        to_evidence_key=link.to_evidence_key,
+        asset_symbol=link.asset_symbol,
+        from_quantity=link.from_quantity,
+        to_quantity=link.to_quantity,
+        quantity_delta=link.quantity_delta,
+        fee_quantity=link.fee_quantity,
+        fee_asset_symbol=link.fee_asset_symbol,
+        amount_usd=link.amount_usd,
+        from_source=link.from_source,
+        to_source=link.to_source,
+        occurred_at=link.occurred_at,
+        confidence_state=link.confidence_state,
+        review_task_id=link.review_task_id,
+        created_by=link.created_by,
+        decision_source=link.decision_source,
+        status=link.status,
+        decision_reason=link.decision_reason,
+    )
+
+
+def _task_model(task: ReconciliationTaskRecord) -> AccountingReconciliationTask:
+    return AccountingReconciliationTask(
+        task_id=task.task_id,
+        task_key=task.task_key,
+        task_type=task.task_type,
+        status=task.status,
+        severity=task.severity,
+        source=task.source,
+        asset_symbol=task.asset_symbol,
+        quantity=task.quantity,
+        amount_usd=task.amount_usd,
+        occurred_at=task.occurred_at,
+        evidence=task.evidence,
+        candidate_actions=task.candidate_actions,
+        affected_metric_scopes=task.affected_metric_scopes,
+        created_by=task.created_by,
+    )
+
+
+def _cashflow_model(
+    cashflow: ExternalCashflowClassificationRecord,
+) -> AccountingExternalCashflowClassification:
+    return AccountingExternalCashflowClassification(
+        classification_key=cashflow.classification_key,
+        evidence=cashflow.evidence,
+        evidence_key=cashflow.evidence_key,
+        cashflow_type=cashflow.cashflow_type,
+        movement_type=cashflow.movement_type,
+        source=cashflow.source,
+        asset_symbol=cashflow.asset_symbol,
+        quantity=cashflow.quantity,
+        amount_usd=cashflow.amount_usd,
+        occurred_at=cashflow.occurred_at,
+        capital_effect_usd=cashflow.capital_effect_usd,
+        confidence_state=cashflow.confidence_state,
+        materiality_usd=cashflow.materiality_usd,
+        review_task_id=cashflow.review_task_id,
+        created_by=cashflow.created_by,
+        decision_source=cashflow.decision_source,
+        status=cashflow.status,
+        decision_reason=cashflow.decision_reason,
     )
 
 

@@ -5,11 +5,25 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+from app.db.models import (
+    AccountingCostBasisDecision,
+    AccountingExternalCashflowClassification,
+    AccountingReconciliationTask,
+    AccountingTransferLink,
+)
 from app.services.accounting_reconciliation import (
+    AccountingResolutionError,
     MovementEvidence,
     ReconciliationResult,
+    reconcile_and_persist_movements,
     reconcile_movements,
+    resolve_reconciliation_task,
 )
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from api.tests.db.test_schema_alignment import _run_alembic, temporary_database_url
 
 NOW = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
 
@@ -43,6 +57,22 @@ def _movement(
 
 def _result_for(*movements: MovementEvidence) -> ReconciliationResult:
     return reconcile_movements(list(movements))
+
+
+@pytest.fixture()
+def migrated_database_url() -> str:
+    with temporary_database_url() as database_url:
+        _run_alembic("upgrade", database_url)
+        yield database_url
+
+
+@pytest.fixture()
+async def session_factory(migrated_database_url: str):
+    engine = create_async_engine(migrated_database_url)
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
 
 
 def test_exact_binance_to_aster_identifier_match_writes_active_transfer_link() -> None:
@@ -240,3 +270,203 @@ def test_reconcile_movements_is_idempotent_by_task_and_link_key() -> None:
         first.reconciliation_tasks[0].task_key
         == second.reconciliation_tasks[0].task_key
     )
+
+
+async def test_reconcile_and_persist_movements_writes_canonical_state_idempotently(
+    session_factory,
+) -> None:
+    deterministic_withdrawal = _movement(destination_event_id="aster-deposit-1")
+    deterministic_deposit = _movement(
+        source="aster",
+        tx_type="deposit",
+        quantity=Decimal("100"),
+        evidence_key="aster-deposit-1",
+        source_event_id="aster-deposit-1",
+    )
+    unknown_crypto = _movement(
+        asset_symbol="BTC",
+        quantity=Decimal("-0.25"),
+        evidence_key="binance-btc-withdrawal",
+        amount_usd=Decimal("15000"),
+    )
+    xtb_withdrawal = _movement(
+        source="xtb",
+        tx_type="withdrawal",
+        asset_symbol="USD",
+        quantity=Decimal("-250"),
+        evidence_key="xtb-withdrawal",
+        amount_usd=Decimal("250"),
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await reconcile_and_persist_movements(
+                session,
+                [
+                    deterministic_withdrawal,
+                    deterministic_deposit,
+                    unknown_crypto,
+                    xtb_withdrawal,
+                ],
+            )
+            await reconcile_and_persist_movements(
+                session,
+                [
+                    deterministic_withdrawal,
+                    deterministic_deposit,
+                    unknown_crypto,
+                    xtb_withdrawal,
+                ],
+            )
+
+        transfer_links = (
+            (await session.execute(select(AccountingTransferLink))).scalars().all()
+        )
+        tasks = (
+            (await session.execute(select(AccountingReconciliationTask)))
+            .scalars()
+            .all()
+        )
+        cashflows = (
+            (await session.execute(select(AccountingExternalCashflowClassification)))
+            .scalars()
+            .all()
+        )
+
+    assert len(transfer_links) == 1
+    assert transfer_links[0].status == "active"
+    assert len(tasks) == 1
+    assert tasks[0].status == "open"
+    assert tasks[0].task_type == "unknown_outgoing_transfer"
+    assert len(cashflows) == 1
+    assert cashflows[0].cashflow_type == "external_withdrawal"
+    assert cashflows[0].capital_effect_usd == Decimal("-250.000000")
+
+
+async def test_resolve_reconciliation_task_validates_decision_back_reference(
+    session_factory,
+) -> None:
+    movement = _movement(
+        asset_symbol="SOL",
+        quantity=Decimal("-10"),
+        evidence_key="binance-sol-withdrawal",
+        amount_usd=Decimal("1000"),
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await reconcile_and_persist_movements(session, [movement])
+            task = await session.scalar(
+                select(AccountingReconciliationTask).where(
+                    AccountingReconciliationTask.task_key
+                    == "task:unknown_outgoing_transfer:binance-sol-withdrawal"
+                )
+            )
+            assert task is not None
+            decision = AccountingCostBasisDecision(
+                basis_key="basis:sol:manual",
+                decision_type="manual_cost_basis",
+                asset_symbol="SOL",
+                basis_scope="asset_global",
+                cost_basis_usd=Decimal("1000"),
+                effective_at=NOW,
+                confidence_state="trusted",
+                affected_metric_scopes=["asset_lifetime_pnl"],
+                review_task_id=task.task_id,
+                created_by="local_user",
+                decision_source="manual",
+                status="active",
+                decision_reason="manual_average_cost",
+            )
+            session.add(decision)
+            await session.flush()
+            resolved = await resolve_reconciliation_task(
+                session,
+                task_id=task.task_id,
+                decision_type="accounting_cost_basis_decision",
+                decision_id=decision.id,
+                resolved_by="local_user",
+                resolved_at=NOW,
+            )
+
+        assert resolved.status == "resolved"
+        assert resolved.resolved_by_decision_type == "accounting_cost_basis_decision"
+        assert resolved.resolved_by_decision_id == decision.id
+
+
+async def test_resolve_reconciliation_task_rejects_missing_decision(
+    session_factory,
+) -> None:
+    movement = _movement(
+        asset_symbol="SOL",
+        quantity=Decimal("-10"),
+        evidence_key="binance-sol-missing-decision",
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await reconcile_and_persist_movements(session, [movement])
+            task = await session.scalar(
+                select(AccountingReconciliationTask).where(
+                    AccountingReconciliationTask.task_key
+                    == "task:unknown_outgoing_transfer:binance-sol-missing-decision"
+                )
+            )
+            assert task is not None
+            with pytest.raises(AccountingResolutionError, match="does not exist"):
+                await resolve_reconciliation_task(
+                    session,
+                    task_id=task.task_id,
+                    decision_type="accounting_cost_basis_decision",
+                    decision_id=999999,
+                    resolved_by="local_user",
+                    resolved_at=NOW,
+                )
+
+
+async def test_resolve_reconciliation_task_rejects_mismatched_review_task_id(
+    session_factory,
+) -> None:
+    movement = _movement(
+        asset_symbol="SOL",
+        quantity=Decimal("-10"),
+        evidence_key="binance-sol-mismatched-decision",
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await reconcile_and_persist_movements(session, [movement])
+            task = await session.scalar(
+                select(AccountingReconciliationTask).where(
+                    AccountingReconciliationTask.task_key
+                    == "task:unknown_outgoing_transfer:binance-sol-mismatched-decision"
+                )
+            )
+            assert task is not None
+            decision = AccountingCostBasisDecision(
+                basis_key="basis:sol:mismatch",
+                decision_type="manual_cost_basis",
+                asset_symbol="SOL",
+                basis_scope="asset_global",
+                cost_basis_usd=Decimal("1000"),
+                effective_at=NOW,
+                confidence_state="trusted",
+                affected_metric_scopes=["asset_lifetime_pnl"],
+                review_task_id="other_task",
+                created_by="local_user",
+                decision_source="manual",
+                status="active",
+                decision_reason="manual_average_cost",
+            )
+            session.add(decision)
+            await session.flush()
+
+            with pytest.raises(AccountingResolutionError, match="review_task_id"):
+                await resolve_reconciliation_task(
+                    session,
+                    task_id=task.task_id,
+                    decision_type="accounting_cost_basis_decision",
+                    decision_id=decision.id,
+                    resolved_by="local_user",
+                    resolved_at=NOW,
+                )
