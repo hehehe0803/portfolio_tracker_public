@@ -13,7 +13,9 @@ from shared.python.contracts import (
     AccountingReviewTask,
     AlertEventContract,
     AlertRuleContract,
+    AssetDetailContract,
     AssetSnapshot,
+    DashboardContract,
     ImportArtifactContract,
     IngestionEvent,
     NoteContract,
@@ -86,6 +88,25 @@ def test_python_contracts_expose_expected_fields():
         "decision_id",
         "replayed",
     }
+    assert set(DashboardContract.model_fields) >= {
+        "current_total_value_usd",
+        "rolling_30d",
+        "lifetime",
+        "confidence_state",
+        "asset_type_distribution",
+        "cash_reserve",
+        "holding_drivers",
+        "top_reconciliation_action",
+    }
+    assert set(AssetDetailContract.model_fields) >= {
+        "symbol",
+        "current_position",
+        "capital_allocated_usd",
+        "lifetime",
+        "recent_movement",
+        "driver_explanation",
+        "trust_blockers",
+    }
 
 
 def test_typescript_contracts_define_matching_exports():
@@ -106,9 +127,14 @@ def test_typescript_contracts_define_matching_exports():
         "ManualCostBasisDecision",
         "AccountingReviewDecisionRequest",
         "AccountingReviewDecisionResponse",
+        "DashboardContract",
+        "DashboardRollingPeriod",
+        "AssetDetailContract",
+        "AssetCurrentPosition",
     ):
         assert f"export interface {export_name}" in contents
     assert "export type AccountingReviewAction" in contents
+    assert "export type ConfidenceState" in contents
     assert "'unknown'" in contents
 
 
@@ -117,8 +143,9 @@ def test_shared_contracts_import_from_api_service_context():
     api_dir = repo_root / "api"
     script = (
         "from shared.python.contracts import AssetSnapshot, "
-        "AccountingReviewDecisionRequest; "
-        "print(AssetSnapshot.__name__, AccountingReviewDecisionRequest.__name__)"
+        "AccountingReviewDecisionRequest, DashboardContract, AssetDetailContract; "
+        "print(AssetSnapshot.__name__, AccountingReviewDecisionRequest.__name__, "
+        "DashboardContract.__name__, AssetDetailContract.__name__)"
     )
     result = subprocess.run(  # noqa: S603
         [sys.executable, "-c", script],
@@ -129,4 +156,8 @@ def test_shared_contracts_import_from_api_service_context():
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "AssetSnapshot AccountingReviewDecisionRequest"
+    assert (
+        result.stdout.strip()
+        == "AssetSnapshot AccountingReviewDecisionRequest DashboardContract "
+        "AssetDetailContract"
+    )

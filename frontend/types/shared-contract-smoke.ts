@@ -3,9 +3,11 @@ import type {
   AccountingReviewDecisionResponse,
   AccountingReviewQueue,
   AccountingReviewTask,
+  AssetDetailContract,
   AlertEventContract,
   AlertRuleContract,
   AssetSnapshot,
+  DashboardContract,
   ImportArtifactContract,
   NoteContract,
   TagContract,
@@ -26,4 +28,6 @@ export type SharedContractSmoke = {
   accountingReviewQueue: AccountingReviewQueue
   accountingReviewDecisionRequest: AccountingReviewDecisionRequest
   accountingReviewDecisionResponse: AccountingReviewDecisionResponse
+  dashboard: DashboardContract
+  assetDetail: AssetDetailContract
 }
