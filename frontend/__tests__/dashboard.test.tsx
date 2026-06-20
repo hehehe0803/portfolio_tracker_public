@@ -20,6 +20,8 @@ import {
   dashboardSyncStatuses,
   dashboardTransactions,
   fixedNow,
+  severeBlockedDashboardContract,
+  trustedDashboardContract,
 } from './dashboard.fixtures'
 
 const push = jest.fn()
@@ -70,6 +72,7 @@ jest.mock('@/components/providers/auth-provider', () => ({
 
 jest.mock('@/lib/api', () => ({
   portfolioAPI: {
+    dashboard: jest.fn(),
     summary: jest.fn(),
     capitalTruth: jest.fn(),
     performanceSummary: jest.fn(),
@@ -122,6 +125,7 @@ describe('dashboard UI', () => {
 
   beforeEach(() => {
     push.mockReset()
+    jest.mocked(portfolioAPI.dashboard).mockReset()
     jest.mocked(portfolioAPI.summary).mockReset()
     jest.mocked(portfolioAPI.capitalTruth).mockReset()
     jest.mocked(portfolioAPI.performanceSummary).mockReset()
@@ -131,6 +135,7 @@ describe('dashboard UI', () => {
     jest.mocked(syncAPI.binance).mockReset()
     jest.mocked(syncAPI.status).mockReset()
 
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue(trustedDashboardContract)
     jest.mocked(portfolioAPI.capitalTruth).mockResolvedValue(dashboardCapitalTruth)
     jest.mocked(portfolioAPI.performanceSummary).mockResolvedValue(dashboardPerformanceSummary)
     jest.mocked(portfolioAPI.assetContributions).mockResolvedValue(dashboardAssetContributions)
@@ -139,163 +144,204 @@ describe('dashboard UI', () => {
   })
 
   it('renders the authenticated loading state', () => {
-    const summaryRequest = deferred<typeof dashboardSummary>()
-    const transactionRequest = deferred<typeof dashboardTransactions>()
-    jest.mocked(portfolioAPI.summary).mockReturnValue(summaryRequest.promise)
-    jest.mocked(portfolioAPI.transactions).mockReturnValue(transactionRequest.promise)
+    const dashboardRequest = deferred<typeof trustedDashboardContract>()
+    jest.mocked(portfolioAPI.dashboard).mockReturnValue(dashboardRequest.promise)
 
     render(<DashboardPage />)
 
-    expect(screen.getByText('Loading telemetry')).toBeInTheDocument()
+    expect(screen.getByText('Loading dashboard')).toBeInTheDocument()
   })
 
   it('renders an error banner when dashboard data fails to load', async () => {
-    jest.mocked(portfolioAPI.summary).mockRejectedValue(new Error('portfolio unavailable'))
-    jest.mocked(portfolioAPI.transactions).mockRejectedValue(new Error('transaction feed unavailable'))
+    jest.mocked(portfolioAPI.dashboard).mockRejectedValue(new Error('dashboard unavailable'))
 
     render(<DashboardPage />)
 
     await waitFor(() => {
-      expect(screen.getByText('portfolio unavailable')).toBeInTheDocument()
+      expect(screen.getByText('dashboard unavailable')).toBeInTheDocument()
     })
 
-    expect(screen.queryByText('Loading telemetry')).not.toBeInTheDocument()
+    expect(screen.queryByText('Loading dashboard')).not.toBeInTheDocument()
   })
 
-  it('renders the loaded dashboard with fixture-backed data', async () => {
-    jest.mocked(portfolioAPI.summary).mockResolvedValue(dashboardSummary)
-    jest.mocked(portfolioAPI.transactions).mockResolvedValue(dashboardTransactions)
+  it('VNEXT-07B renders trusted dashboard contract as the first screen', async () => {
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue(trustedDashboardContract)
 
-    const { container } = render(<DashboardPage />)
+    render(<DashboardPage />)
 
-    await screen.findByText('Total portfolio value')
-    await screen.findByText('Portfolio growth')
+    await waitFor(() => {
+      expect(jest.mocked(portfolioAPI.dashboard)).toHaveBeenCalledTimes(1)
+    })
 
-    expect(jest.mocked(portfolioAPI.capitalTruth)).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('Current total value')).toBeInTheDocument()
+    const bridge = screen.getByTestId('dashboard-value-bridge')
+    expect(bridge.compareDocumentPosition(screen.getByText('Current total value'))).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(within(bridge).getByText('30D value bridge')).toBeInTheDocument()
+    expect(within(bridge).getByText('Starting value')).toBeInTheDocument()
+    expect(within(bridge).getByText('$53,000.00')).toBeInTheDocument()
+    expect(within(bridge).getByText('Investment gain')).toBeInTheDocument()
+    expect(screen.getAllByText('$59,510.38').length).toBeGreaterThan(0)
+    expect(screen.getByText('30D investment gain')).toBeInTheDocument()
+    expect(screen.getAllByText('+$5,010.38').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('External contributions').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('$2,000.00').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('External withdrawals').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('$500.00').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Net capital at work').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('$44,000.00').length).toBeGreaterThan(0)
     expect(screen.getByText('Lifetime P/L')).toBeInTheDocument()
-    expect(screen.getByText('-$6.4K')).toBeInTheDocument()
-    expect(screen.getByText('-16.54%')).toBeInTheDocument()
-    expect(screen.getByText('Net capital in')).toBeInTheDocument()
-    expect(screen.getByText('$39.0K')).toBeInTheDocument()
-    expect(screen.getByText('Deposits - withdrawals vs current value. Excludes rows flagged incomplete.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'ALL' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'YTD' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '1Y' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '3M' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '1M' })).toBeInTheDocument()
-    expect(screen.getByTestId('area-chart').getAttribute('data-points')).toContain('netCapitalIn')
-    expect(screen.getAllByTestId('line-series').some(el => el.getAttribute('data-key') === 'netCapitalIn')).toBe(true)
-
-    expect(jest.mocked(portfolioAPI.transactions)).toHaveBeenCalledWith({
-      limit: 50,
-      offset: 0,
-    })
-    expect(screen.getByText('Total portfolio value')).toBeInTheDocument()
-    expect(screen.getAllByText(/59,510/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Holdings').length).toBeGreaterThan(0)
-    expect(screen.getByText('Recent activity')).toBeInTheDocument()
-    expect(screen.getByText('Allocation')).toBeInTheDocument()
-    expect(screen.getByText('Portfolio growth')).toBeInTheDocument()
-    await screen.findByText('Asset winners / losers')
-    expect(jest.mocked(portfolioAPI.assetContributions)).toHaveBeenCalledWith({
-      sort_by: 'net_lifetime_pnl_usd',
-      order: 'desc',
-    })
-    expect(screen.getByText('Biggest winners')).toBeInTheDocument()
-    expect(screen.getByText('Biggest losers')).toBeInTheDocument()
-    expect(screen.getByText('LUNA')).toBeInTheDocument()
-    expect(screen.getByText('-$5.4K')).toBeInTheDocument()
-    expect(screen.getByText('realized -$5.4K')).toBeInTheDocument()
-    expect(screen.getByText('fees -$18.00')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '$ P/L' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: '% return' })).toBeInTheDocument()
-    expect(screen.getByText('Pending orders')).toBeInTheDocument()
-    expect(screen.getByText('Institution sync state')).toBeInTheDocument()
-    expect(screen.getAllByText(/degraded/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText('withdraw_history: withdraw disabled').length).toBeGreaterThan(0)
+    expect(screen.getByText('+$15,510.38')).toBeInTheDocument()
+    expect(screen.getAllByText('Trusted').length).toBeGreaterThan(0)
+    expect(screen.getByText('Asset-type distribution')).toBeInTheDocument()
+    expect(screen.getByText('Crypto')).toBeInTheDocument()
+    expect(screen.getByText('$40,000.00')).toBeInTheDocument()
+    expect(screen.getByText('67.2%')).toBeInTheDocument()
+    expect(screen.getByText('Cash reserve')).toBeInTheDocument()
+    expect(screen.getAllByText('$8,500.00').length).toBeGreaterThan(0)
+    expect(screen.getByText('Stablecoin reserve')).toBeInTheDocument()
+    expect(screen.getByText('$6,000.00')).toBeInTheDocument()
+    expect(screen.getByText('Holding drivers')).toBeInTheDocument()
     expect(screen.getAllByText('BTC').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('AAPL').length).toBeGreaterThan(0)
-    expect(screen.getByTestId('area-chart').getAttribute('data-points')).toContain('2026-04-03')
-    expect(screen.getByTestId('pie').getAttribute('data-points')).toContain('crypto')
-    expect(screen.queryByText('Loading telemetry')).not.toBeInTheDocument()
-
-    expect(container.querySelector('main')).toMatchSnapshot()
+    expect(screen.getByText('+$3,100.00')).toBeInTheDocument()
+    expect(screen.getByText('AAPL')).toBeInTheDocument()
+    expect(screen.getByText('-$275.00')).toBeInTheDocument()
+    expect(screen.getByText('No accounting action needed.')).toBeInTheDocument()
+    expect(screen.getByText('Raw activity and import logs')).toBeInTheDocument()
   })
 
-  it('loads only a small recent transaction feed for the dashboard', async () => {
-    jest.mocked(portfolioAPI.summary).mockResolvedValue(dashboardSummary)
-    jest.mocked(portfolioAPI.transactions).mockResolvedValue(dashboardTransactions)
+  it('VNEXT-07B suppresses sensitive values and promotes reconciliation when confidence is blocked', async () => {
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue(severeBlockedDashboardContract)
 
     render(<DashboardPage />)
 
-    await screen.findByText('Total portfolio value')
-    expect(jest.mocked(portfolioAPI.transactions)).toHaveBeenCalledTimes(1)
-    expect(jest.mocked(portfolioAPI.transactions)).toHaveBeenCalledWith({
-      limit: 50,
-      offset: 0,
+    expect(await screen.findByText('Current total value')).toBeInTheDocument()
+    expect(screen.getAllByText('$59,510.38').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Blocked').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('missing cost basis').length).toBeGreaterThan(0)
+    expect(screen.getByText('30D investment gain unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Lifetime P/L unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Resolve missing cost basis')).toBeInTheDocument()
+    expect(screen.getAllByText('BTC').length).toBeGreaterThan(0)
+    expect(screen.getByText('$1,200.00')).toBeInTheDocument()
+    expect(screen.getByText('period performance')).toBeInTheDocument()
+    expect(screen.queryByText('+$5,010.38')).not.toBeInTheDocument()
+    expect(screen.queryByText('+$15,510.38')).not.toBeInTheDocument()
+  })
+
+  it('VNEXT-07B hides net capital when the contract blocks net capital scope', async () => {
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue({
+      ...trustedDashboardContract,
+      blocked_metric_scopes: ['net_capital'],
+      confidence_state: 'blocked',
+      reason_codes: ['unresolved_cashflow'],
+      lifetime: {
+        ...trustedDashboardContract.lifetime,
+        confidence_state: 'blocked',
+        reason_codes: ['unresolved_cashflow'],
+      },
     })
-  })
-
-  it('paints core dashboard content before slow background panels finish', async () => {
-    const txRequest = deferred<typeof dashboardTransactions>()
-    const perfRequest = deferred<typeof dashboardPerformanceSummary>()
-    const ordersRequest = deferred<typeof dashboardPendingOrders>()
-    jest.mocked(portfolioAPI.summary).mockResolvedValue(dashboardSummary)
-    jest.mocked(syncAPI.status).mockResolvedValue(dashboardSyncStatuses)
-    jest.mocked(portfolioAPI.transactions).mockReturnValue(txRequest.promise)
-    jest.mocked(portfolioAPI.performanceSummary).mockReturnValue(perfRequest.promise)
-    jest.mocked(portfolioAPI.pendingOrders).mockReturnValue(ordersRequest.promise)
 
     render(<DashboardPage />)
 
-    expect(await screen.findByText('Total portfolio value')).toBeInTheDocument()
-    expect(screen.queryByText('Loading telemetry')).not.toBeInTheDocument()
-    expect(screen.getByText('Performance data unavailable')).toBeInTheDocument()
-
-    txRequest.resolve(dashboardTransactions)
-    perfRequest.resolve(dashboardPerformanceSummary)
-    ordersRequest.resolve(dashboardPendingOrders)
+    expect(await screen.findByText('Current total value')).toBeInTheDocument()
+    expect(screen.getAllByText('Net capital unavailable')).toHaveLength(2)
+    expect(screen.queryByText('$44,000.00')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Review required').length).toBeGreaterThan(0)
   })
 
-  it('keeps the core dashboard visible when optional portfolio surface requests fail', async () => {
-    jest.mocked(portfolioAPI.summary).mockResolvedValue(dashboardSummary)
-    jest.mocked(portfolioAPI.transactions).mockResolvedValue(dashboardTransactions)
-    jest.mocked(portfolioAPI.performanceSummary).mockRejectedValue(new Error('performance summary unavailable'))
-    jest.mocked(portfolioAPI.pendingOrders).mockRejectedValue(new Error('pending orders unavailable'))
-    jest.mocked(portfolioAPI.assetContributions).mockRejectedValue(new Error('asset contributions unavailable'))
+  it('VNEXT-07B marks flagged holding drivers without rendering exact movement values', async () => {
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue({
+      ...trustedDashboardContract,
+      holding_drivers: [
+        {
+          ...trustedDashboardContract.holding_drivers[0],
+          confidence_state: 'provisional',
+          reason_codes: ['missing_price_anchor'],
+          value_state: 'flagged',
+        },
+      ],
+    })
+
+    render(<DashboardPage />)
+
+    expect(await screen.findByText('Holding drivers')).toBeInTheDocument()
+    expect(screen.getByText('Flagged for review')).toBeInTheDocument()
+    expect(screen.getByText('missing price anchor')).toBeInTheDocument()
+    expect(screen.queryByText('+$3,100.00')).not.toBeInTheDocument()
+    expect(screen.queryByText('61.9% of known move')).not.toBeInTheDocument()
+  })
+
+  it('VNEXT-07B hides distribution bar magnitude when percentage is suppressed', async () => {
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue({
+      ...trustedDashboardContract,
+      asset_type_distribution: [
+        {
+          ...trustedDashboardContract.asset_type_distribution[0],
+          percentage: null,
+          percentage_state: 'suppressed',
+          confidence_state: 'provisional',
+          reason_codes: ['weak_denominator'],
+        },
+      ],
+    })
+
+    render(<DashboardPage />)
+
+    expect(await screen.findByText('Asset-type distribution')).toBeInTheDocument()
+    expect(screen.getByText('Hidden')).toBeInTheDocument()
+    expect(screen.getByTestId('distribution-bar-crypto')).toHaveStyle({ width: '0%' })
+  })
+
+  it('VNEXT-07B does not render ambiguous legacy profit labels', async () => {
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue(trustedDashboardContract)
+
+    render(<DashboardPage />)
+
+    expect(await screen.findByText('Current total value')).toBeInTheDocument()
+    expect(screen.queryByText(/all-time p[&/]l/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/^total p[&/]l$/i)).not.toBeInTheDocument()
+  })
+
+  it('renders the loaded dashboard from the contract without legacy portfolio surfaces', async () => {
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue(trustedDashboardContract)
+
+    render(<DashboardPage />)
+
+    expect(await screen.findByText('Current total value')).toBeInTheDocument()
+    expect(jest.mocked(portfolioAPI.dashboard)).toHaveBeenCalledTimes(1)
+    expect(jest.mocked(portfolioAPI.summary)).not.toHaveBeenCalled()
+    expect(jest.mocked(portfolioAPI.capitalTruth)).not.toHaveBeenCalled()
+    expect(jest.mocked(portfolioAPI.performanceSummary)).not.toHaveBeenCalled()
+    expect(jest.mocked(portfolioAPI.assetContributions)).not.toHaveBeenCalled()
+    expect(jest.mocked(portfolioAPI.transactions)).not.toHaveBeenCalled()
+    expect(screen.queryByText('Recent activity')).not.toBeInTheDocument()
+    expect(screen.queryByText('Asset winners / losers')).not.toBeInTheDocument()
+    expect(screen.queryByText('Portfolio growth')).not.toBeInTheDocument()
+  })
+
+  it('keeps the contract dashboard visible when sync status is unavailable', async () => {
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue(trustedDashboardContract)
     jest.mocked(syncAPI.status).mockRejectedValue(new Error('sync status unavailable'))
 
     render(<DashboardPage />)
 
-    await screen.findByText('Total portfolio value')
-
-    await waitFor(() => {
-      expect(screen.getByText('Performance summary is unavailable right now.')).toBeInTheDocument()
-    })
-    expect(screen.getByText('Asset winners/losers are temporarily unavailable.')).toBeInTheDocument()
-    expect(screen.getByText('Pending orders are temporarily unavailable.')).toBeInTheDocument()
-    expect(screen.getByText('Institution sync status is temporarily unavailable.')).toBeInTheDocument()
-    expect(screen.queryByText('No open or pending orders are currently tracked.')).not.toBeInTheDocument()
-    expect(screen.queryByText('No institution sync channels are configured yet.')).not.toBeInTheDocument()
+    expect(await screen.findByText('Current total value')).toBeInTheDocument()
+    expect(screen.getAllByText('Sync status unavailable').length).toBeGreaterThan(0)
   })
 
   it('syncs Binance and refreshes the loaded dashboard', async () => {
     const user = userEvent.setup()
-    jest.mocked(portfolioAPI.summary)
-      .mockResolvedValueOnce(dashboardSummary)
+    jest.mocked(portfolioAPI.dashboard)
+      .mockResolvedValueOnce(trustedDashboardContract)
       .mockResolvedValueOnce({
-        ...dashboardSummary,
-        total_pnl_usd: 17000,
-        total_pnl_pct: 40.0,
+        ...trustedDashboardContract,
+        current_total_value_usd: '60000.00',
       })
-    jest.mocked(portfolioAPI.transactions)
-      .mockResolvedValueOnce(dashboardTransactions)
-      .mockResolvedValueOnce(dashboardTransactions)
     jest.mocked(syncAPI.binance).mockResolvedValue({ synced: 2, skipped: 0 })
 
     render(<DashboardPage />)
 
-    await screen.findByText('Total portfolio value')
+    await screen.findByText('Current total value')
     await user.click(screen.getByRole('button', { name: 'Sync Binance' }))
 
     await waitFor(() => {
@@ -303,23 +349,22 @@ describe('dashboard UI', () => {
     })
 
     expect(screen.getByText('Synced 2 records')).toBeInTheDocument()
-    expect(screen.getByText('Total portfolio value')).toBeInTheDocument()
+    expect(screen.getByText('$60,000.00')).toBeInTheDocument()
     expect(screen.getAllByText('BTC').length).toBeGreaterThan(0)
   })
 
   it('opens mobile navigation with access to dashboard sections', async () => {
     const user = userEvent.setup()
-    jest.mocked(portfolioAPI.summary).mockResolvedValue(dashboardSummary)
-    jest.mocked(portfolioAPI.transactions).mockResolvedValue(dashboardTransactions)
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue(trustedDashboardContract)
 
     render(<DashboardPage />)
 
-    await screen.findByText('Total portfolio value')
+    await screen.findByText('Current total value')
     await user.click(screen.getByRole('button', { name: 'Open navigation menu' }))
 
     expect(screen.getByRole('link', { name: 'Overview' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Transactions' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Import' })).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Transactions' }).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('link', { name: 'Import' }).length).toBeGreaterThan(0)
     expect(screen.getAllByRole('link', { name: 'Settings' }).length).toBeGreaterThan(0)
   })
 

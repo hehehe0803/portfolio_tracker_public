@@ -13,6 +13,7 @@ import {
   dashboardSummary,
   dashboardSyncStatuses,
   dashboardTransactions,
+  trustedDashboardContract,
 } from './dashboard.fixtures'
 
 const push = jest.fn()
@@ -39,6 +40,7 @@ jest.mock('@/components/providers/auth-provider', () => ({
 
 jest.mock('@/lib/api', () => ({
   portfolioAPI: {
+    dashboard: jest.fn(),
     summary: jest.fn(),
     capitalTruth: jest.fn(),
     performanceSummary: jest.fn(),
@@ -111,6 +113,7 @@ describe('mobile-first route IA', () => {
     pathname.mockReturnValue('/')
     params.mockReturnValue({ symbol: 'BTC' })
     searchParams.mockReturnValue(new URLSearchParams('institution=binance'))
+    jest.mocked(portfolioAPI.dashboard).mockResolvedValue(trustedDashboardContract)
     jest.mocked(portfolioAPI.summary).mockResolvedValue(dashboardSummary)
     jest.mocked(portfolioAPI.capitalTruth).mockResolvedValue(dashboardCapitalTruth)
     jest.mocked(portfolioAPI.performanceSummary).mockResolvedValue(dashboardPerformanceSummary)
@@ -139,30 +142,32 @@ describe('mobile-first route IA', () => {
   it('preserves overview mobile order from summary through activity without unmarked visual surfaces', async () => {
     const { container } = render(<DashboardPage />)
 
-    await screen.findByText('Total portfolio value')
+    await screen.findByText('Current total value')
 
     expect(mobileSections(container)).toEqual([
+      'overview-value-bridge',
       'overview-summary',
-      'overview-growth',
-      'overview-asset-contributions',
-      'overview-health',
-      'overview-holdings',
-      'overview-action-surfaces',
-      'overview-activity',
+      'overview-period',
+      'overview-confidence',
+      'overview-distribution',
+      'overview-cash',
+      'overview-drivers',
+      'overview-lifetime',
+      'overview-drilldowns',
     ])
-    expect(mobileSectionForText('LIVE')).toBe('overview-health')
-    expect(mobileSectionForText('Asset winners / losers')).toBe('overview-asset-contributions')
-    expect(mobileSectionForText('Allocation')).toBe('overview-holdings')
+    expect(mobileSectionForText('No accounting action needed.')).toBe('overview-confidence')
+    expect(mobileSectionForText('Asset-type distribution')).toBe('overview-distribution')
+    expect(mobileSectionForText('Holding drivers')).toBe('overview-drivers')
   })
 
   it('keeps overview action and activity as side-by-side desktop siblings with no empty grid column', async () => {
     const { container } = render(<DashboardPage />)
 
-    await screen.findByText('Total portfolio value')
+    await screen.findByText('Current total value')
 
     const overviewWorkflow = container.querySelector('[data-overview-workflow]')
-    expect(overviewWorkflow).toHaveClass('xl:grid-cols-[0.85fr_1.15fr]')
-    expect(directMobileSectionChildren(container, '[data-overview-workflow]')).toHaveLength(2)
+    expect(overviewWorkflow).toHaveClass('xl:grid-cols-[1.2fr_0.9fr_1fr]')
+    expect(directMobileSectionChildren(container, '[data-overview-workflow]')).toHaveLength(3)
   })
 
   it('preserves portfolio details mobile order and exposes filters as disabled placeholders', async () => {

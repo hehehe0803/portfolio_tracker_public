@@ -20,7 +20,7 @@ test('redirects unauthenticated users, logs in, restores session, and logs out',
   await page.getByRole('button', { name: /^authenticate$/i }).click()
 
   await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByText(/total portfolio value/i)).toBeVisible()
+  await expect(page.getByText(/current total value/i)).toBeVisible()
   await openLogoutControl(page)
 
   await page.reload()
