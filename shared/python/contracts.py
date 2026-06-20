@@ -95,6 +95,27 @@ AccountingReviewAction = Literal[
 ]
 
 
+ConfidenceState = Literal[
+    "trusted",
+    "warning",
+    "provisional",
+    "review_required",
+    "blocked",
+]
+
+DistributionAssetType = Literal[
+    "crypto",
+    "stocks_etfs",
+    "commodities",
+    "cash",
+    "other",
+]
+
+PercentageState = Literal["visible", "suppressed"]
+DriverDirection = Literal["positive", "negative", "flat", "unknown"]
+DriverValueState = Literal["visible", "flagged", "hidden"]
+
+
 class AccountingReviewTask(ContractBaseModel):
     task_id: str
     task_type: str
@@ -147,3 +168,122 @@ class AccountingReviewDecisionResponse(ContractBaseModel):
     decision_type: str
     decision_id: int
     replayed: bool = False
+
+
+class DashboardRollingPeriod(ContractBaseModel):
+    label: str
+    days: int
+    start_at: datetime
+    end_at: datetime
+    starting_value_usd: Decimal | None = None
+    ending_value_usd: Decimal | None = None
+    external_contributions_usd: Decimal
+    external_withdrawals_usd: Decimal
+    investment_gain_usd: Decimal | None = None
+    confidence_state: ConfidenceState
+    reason_codes: list[str] = Field(default_factory=list)
+    visible: bool
+
+
+class DashboardLifetimeSummary(ContractBaseModel):
+    gross_contributions_usd: Decimal
+    gross_withdrawals_usd: Decimal
+    net_capital_at_work_usd: Decimal
+    lifetime_pnl_usd: Decimal | None = None
+    return_pct: Decimal | None = None
+    confidence_state: ConfidenceState
+    reason_codes: list[str] = Field(default_factory=list)
+    visible: bool
+
+
+class DistributionBucketContract(ContractBaseModel):
+    asset_type: DistributionAssetType
+    value_usd: Decimal
+    percentage: Decimal | None = None
+    percentage_state: PercentageState
+    confidence_state: ConfidenceState
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class CashReserveContract(ContractBaseModel):
+    stablecoin_usd: Decimal
+    broker_cash_usd: Decimal
+    other_tracked_cash_usd: Decimal
+    total_usd: Decimal
+    confidence_state: ConfidenceState
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class HoldingDriverContract(ContractBaseModel):
+    symbol: str
+    movement_usd: Decimal | None = None
+    share_of_known_movement_pct: Decimal | None = None
+    direction: DriverDirection
+    confidence_state: ConfidenceState
+    reason_codes: list[str] = Field(default_factory=list)
+    value_state: DriverValueState
+
+
+class DashboardContract(ContractBaseModel):
+    as_of: datetime
+    current_total_value_usd: Decimal | None = None
+    rolling_30d: DashboardRollingPeriod
+    lifetime: DashboardLifetimeSummary
+    confidence_state: ConfidenceState
+    reason_codes: list[str] = Field(default_factory=list)
+    blocked_metric_scopes: list[str] = Field(default_factory=list)
+    asset_type_distribution: list[DistributionBucketContract]
+    cash_reserve: CashReserveContract
+    holding_drivers: list[HoldingDriverContract]
+    top_reconciliation_action: AccountingReviewTask | None = None
+
+
+class AssetCurrentPosition(ContractBaseModel):
+    quantity: Decimal
+    current_price_usd: Decimal | None = None
+    current_value_usd: Decimal | None = None
+    average_cost_usd: Decimal | None = None
+    current_position_pnl_usd: Decimal | None = None
+    current_position_pnl_pct: Decimal | None = None
+    confidence_state: ConfidenceState
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class AssetLifetimeContribution(ContractBaseModel):
+    contribution_basis_usd: Decimal | None = None
+    contribution_pnl_usd: Decimal | None = None
+    confidence_state: ConfidenceState
+    reason_codes: list[str] = Field(default_factory=list)
+    visible: bool
+
+
+class AssetRecentMovement(ContractBaseModel):
+    period_label: str
+    movement_usd: Decimal | None = None
+    direction: DriverDirection
+    confidence_state: ConfidenceState
+    reason_codes: list[str] = Field(default_factory=list)
+    value_state: DriverValueState
+
+
+class AssetDriverExplanation(ContractBaseModel):
+    symbol: str
+    period_label: str
+    movement_usd: Decimal | None = None
+    share_of_known_movement_pct: Decimal | None = None
+    direction: DriverDirection
+    explanation: str
+    confidence_state: ConfidenceState
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class AssetDetailContract(ContractBaseModel):
+    symbol: str
+    asset_type: str
+    as_of: datetime
+    current_position: AssetCurrentPosition
+    capital_allocated_usd: Decimal | None = None
+    lifetime: AssetLifetimeContribution
+    recent_movement: AssetRecentMovement | None = None
+    driver_explanation: AssetDriverExplanation | None = None
+    trust_blockers: list[AccountingReviewTask] = Field(default_factory=list)
