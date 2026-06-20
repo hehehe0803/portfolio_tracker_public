@@ -3,7 +3,7 @@ import DashboardPage from '@/app/page'
 import PortfolioDetailsPage from '@/app/portfolio/page'
 import HoldingDetailPage from '@/app/holdings/[symbol]/page'
 import { HoldingsPanel } from '@/components/dashboard/HoldingsPanel'
-import { intelligenceAPI, portfolioAPI, syncAPI, watchlistAPI } from '@/lib/api'
+import { intelligenceAPI, portfolioAPI, syncAPI, watchlistAPI, type AssetDetailContract } from '@/lib/api'
 import {
   dashboardAssetContributions,
   dashboardCapitalTruth,
@@ -21,6 +21,49 @@ const router = { push }
 const pathname = jest.fn(() => '/')
 const params = jest.fn(() => ({ symbol: 'BTC' }))
 const searchParams = jest.fn(() => new URLSearchParams('institution=binance'))
+
+const mobileAssetDetail: AssetDetailContract = {
+  symbol: 'BTC',
+  asset_type: 'crypto',
+  as_of: '2026-04-14T10:00:00+00:00',
+  current_position: {
+    quantity: '0.75',
+    current_price_usd: '72000',
+    current_value_usd: '54000',
+    average_cost_usd: '50000',
+    current_position_pnl_usd: '16500',
+    current_position_pnl_pct: '44',
+    confidence_state: 'trusted',
+    reason_codes: [],
+  },
+  capital_allocated_usd: '37500',
+  lifetime: {
+    contribution_basis_usd: '36000',
+    contribution_pnl_usd: '18000',
+    confidence_state: 'trusted',
+    reason_codes: [],
+    visible: true,
+  },
+  recent_movement: {
+    period_label: '30D',
+    movement_usd: '3200',
+    direction: 'positive',
+    confidence_state: 'trusted',
+    reason_codes: [],
+    value_state: 'visible',
+  },
+  driver_explanation: {
+    symbol: 'BTC',
+    period_label: '30D',
+    movement_usd: '3200',
+    share_of_known_movement_pct: '62',
+    direction: 'positive',
+    explanation: 'BTC led known 30D portfolio movement.',
+    confidence_state: 'trusted',
+    reason_codes: [],
+  },
+  trust_blockers: [],
+}
 
 jest.mock('next/navigation', () => ({
   useRouter: () => router,
@@ -41,6 +84,7 @@ jest.mock('@/components/providers/auth-provider', () => ({
 jest.mock('@/lib/api', () => ({
   portfolioAPI: {
     dashboard: jest.fn(),
+    assetDetail: jest.fn(),
     summary: jest.fn(),
     capitalTruth: jest.fn(),
     performanceSummary: jest.fn(),
@@ -114,6 +158,7 @@ describe('mobile-first route IA', () => {
     params.mockReturnValue({ symbol: 'BTC' })
     searchParams.mockReturnValue(new URLSearchParams('institution=binance'))
     jest.mocked(portfolioAPI.dashboard).mockResolvedValue(trustedDashboardContract)
+    jest.mocked(portfolioAPI.assetDetail).mockResolvedValue(mobileAssetDetail)
     jest.mocked(portfolioAPI.summary).mockResolvedValue(dashboardSummary)
     jest.mocked(portfolioAPI.capitalTruth).mockResolvedValue(dashboardCapitalTruth)
     jest.mocked(portfolioAPI.performanceSummary).mockResolvedValue(dashboardPerformanceSummary)
@@ -191,14 +236,18 @@ describe('mobile-first route IA', () => {
     ])
   })
 
-  it('preserves holding detail mobile order and exposes filters as disabled placeholders', async () => {
+  it('preserves holding detail mobile order with contract-first trust surfaces', async () => {
+    pathname.mockReturnValue('/holdings/BTC')
+
     const { container } = render(<HoldingDetailPage />)
 
-    await waitFor(() => expect(screen.getByText('Asset detail · v1')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Current-position P&L')).toBeInTheDocument())
 
-    const holdingFilter = screen.getByRole('button', { name: /holding activity filters unavailable/i })
-    expect(holdingFilter).toBeDisabled()
-    expect(holdingFilter).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByText('Lifetime contribution P&L')).toBeInTheDocument()
+    expect(screen.getByText('Trust blockers')).toBeInTheDocument()
+    expect(screen.getByText('Raw activity and import logs')).toBeInTheDocument()
+    expect(mobileSectionForText('Trust blockers')).toBe('holding-action-surfaces')
+    expect(mobileSectionForText('Raw activity and import logs')).toBe('holding-activity')
     expect(mobileSections(container)).toEqual([
       'holding-summary',
       'holding-health',

@@ -1,5 +1,6 @@
-import type { DashboardContract } from '../../shared/typescript/contracts'
-export type { DashboardContract } from '../../shared/typescript/contracts'
+import type { AssetDetailContract, DashboardContract } from '../../shared/typescript/contracts'
+
+export type { AssetDetailContract, DashboardContract }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -227,6 +228,8 @@ export interface AssetContributionSummary {
 export const portfolioAPI = {
   dashboard: () => request<DashboardContract>('/v1/portfolio/dashboard'),
   summary: () => request<PortfolioSummary>('/v1/portfolio/summary'),
+  assetDetail: (symbol: string) =>
+    request<AssetDetailContract>(`/v1/portfolio/assets/${encodeURIComponent(symbol)}/detail`),
   capitalTruth: () => request<CapitalTruthSummary>('/v1/portfolio/capital-truth'),
   performanceSummary: () => request<PerformanceSummary>('/v1/portfolio/performance-summary'),
   pendingOrders: () => request<PendingOrder[]>('/v1/portfolio/pending-orders'),
