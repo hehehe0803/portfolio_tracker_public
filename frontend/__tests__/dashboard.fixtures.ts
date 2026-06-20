@@ -1,6 +1,155 @@
 import type { AssetContributionSummary, CapitalTruthSummary, FreshnessMetadata, Holding, PendingOrder, PerformanceSummary, PortfolioSummary, SyncStatus, Transaction } from '@/lib/api'
+import type { DashboardContract } from '../../shared/typescript/contracts'
 
 export const fixedNow = new Date('2026-04-14T10:15:30Z')
+
+export const trustedDashboardContract: DashboardContract = {
+  as_of: '2026-04-14T10:00:00Z',
+  current_total_value_usd: '59510.38',
+  rolling_30d: {
+    label: '30D',
+    days: 30,
+    start_at: '2026-03-15T10:00:00Z',
+    end_at: '2026-04-14T10:00:00Z',
+    starting_value_usd: '53000.00',
+    ending_value_usd: '59510.38',
+    external_contributions_usd: '2000.00',
+    external_withdrawals_usd: '500.00',
+    investment_gain_usd: '5010.38',
+    confidence_state: 'trusted',
+    reason_codes: [],
+    visible: true,
+  },
+  lifetime: {
+    gross_contributions_usd: '47000.00',
+    gross_withdrawals_usd: '3000.00',
+    net_capital_at_work_usd: '44000.00',
+    lifetime_pnl_usd: '15510.38',
+    return_pct: '35.250863636363636',
+    confidence_state: 'trusted',
+    reason_codes: [],
+    visible: true,
+  },
+  confidence_state: 'trusted',
+  reason_codes: [],
+  blocked_metric_scopes: [],
+  asset_type_distribution: [
+    {
+      asset_type: 'crypto',
+      value_usd: '40000.00',
+      percentage: '67.214706681019',
+      percentage_state: 'visible',
+      confidence_state: 'trusted',
+      reason_codes: [],
+    },
+    {
+      asset_type: 'cash',
+      value_usd: '8500.00',
+      percentage: '14.283222898926',
+      percentage_state: 'visible',
+      confidence_state: 'trusted',
+      reason_codes: [],
+    },
+    {
+      asset_type: 'stocks_etfs',
+      value_usd: '11010.38',
+      percentage: '18.502070420055',
+      percentage_state: 'visible',
+      confidence_state: 'trusted',
+      reason_codes: [],
+    },
+  ],
+  cash_reserve: {
+    stablecoin_usd: '6000.00',
+    broker_cash_usd: '2500.00',
+    other_tracked_cash_usd: '0.00',
+    total_usd: '8500.00',
+    confidence_state: 'trusted',
+    reason_codes: [],
+  },
+  holding_drivers: [
+    {
+      symbol: 'BTC',
+      movement_usd: '3100.00',
+      share_of_known_movement_pct: '61.871746776293',
+      direction: 'positive',
+      confidence_state: 'trusted',
+      reason_codes: [],
+      value_state: 'visible',
+    },
+    {
+      symbol: 'AAPL',
+      movement_usd: '-275.00',
+      share_of_known_movement_pct: '5.488606653587',
+      direction: 'negative',
+      confidence_state: 'trusted',
+      reason_codes: [],
+      value_state: 'visible',
+    },
+  ],
+  top_reconciliation_action: null,
+}
+
+export const severeBlockedDashboardContract: DashboardContract = {
+  ...trustedDashboardContract,
+  rolling_30d: {
+    ...trustedDashboardContract.rolling_30d,
+    investment_gain_usd: null,
+    confidence_state: 'blocked',
+    reason_codes: ['missing_cost_basis'],
+    visible: false,
+  },
+  lifetime: {
+    ...trustedDashboardContract.lifetime,
+    lifetime_pnl_usd: null,
+    return_pct: null,
+    confidence_state: 'blocked',
+    reason_codes: ['missing_cost_basis'],
+    visible: false,
+  },
+  confidence_state: 'blocked',
+  reason_codes: ['missing_cost_basis'],
+  blocked_metric_scopes: [
+    'lifetime_pnl',
+    'period_performance',
+    'asset_level_lifetime_pnl',
+  ],
+  holding_drivers: [
+    {
+      symbol: 'BTC',
+      movement_usd: null,
+      share_of_known_movement_pct: null,
+      direction: 'unknown',
+      confidence_state: 'blocked',
+      reason_codes: ['missing_cost_basis'],
+      value_state: 'hidden',
+    },
+  ],
+  top_reconciliation_action: {
+    task_id: 'task_btc_cost_basis',
+    task_type: 'missing_cost_basis',
+    status: 'open',
+    severity: 'blocked',
+    source: 'binance',
+    asset_symbol: 'BTC',
+    quantity: '0.02',
+    amount_usd: '1200.00',
+    occurred_at: '2026-04-09T10:00:00Z',
+    evidence: {
+      source_evidence_key: 'btc-sell',
+      reasons: ['missing_cost_basis'],
+    },
+    candidate_actions: [
+      { action: 'manual_cost_basis', effect: 'restore_asset_pnl' },
+    ],
+    affected_metric_scopes: [
+      'lifetime_pnl',
+      'period_performance',
+      'asset_level_lifetime_pnl',
+    ],
+    created_at: '2026-04-09T10:00:00Z',
+  },
+}
 
 const freshPrice: FreshnessMetadata = {
   source: 'live_price_provider',

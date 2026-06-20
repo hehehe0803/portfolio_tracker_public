@@ -1,3 +1,6 @@
+import type { DashboardContract } from '../../shared/typescript/contracts'
+export type { DashboardContract } from '../../shared/typescript/contracts'
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 async function request<T>(
@@ -222,6 +225,7 @@ export interface AssetContributionSummary {
 }
 
 export const portfolioAPI = {
+  dashboard: () => request<DashboardContract>('/v1/portfolio/dashboard'),
   summary: () => request<PortfolioSummary>('/v1/portfolio/summary'),
   capitalTruth: () => request<CapitalTruthSummary>('/v1/portfolio/capital-truth'),
   performanceSummary: () => request<PerformanceSummary>('/v1/portfolio/performance-summary'),
